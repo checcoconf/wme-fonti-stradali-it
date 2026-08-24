@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.1.b
-// @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
+// @version      0.0.2.b
+// @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. Di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
 // @supportURL   https://github.com/checcoconf/wme-fonti-stradali-it/issues
@@ -329,7 +329,7 @@
         const p = document.createElement('div');
         p.id = 'wfit-panel';
         p.innerHTML = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
 
   <h4>Dati ANNCSU</h4>
   <div class="wfit-row">
@@ -1046,6 +1046,37 @@
     }
 
     // distanza punto-segmento su piano locale (metri)
+    // Distanza in metri fra due punti (lon/lat)
+    function haversine(lon1, lat1, lon2, lat2) {
+        const R = 6371000, rad = Math.PI / 180;
+        const dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    // Punto a metà lunghezza di una polilinea (per centrare la mappa su un segmento)
+    function lineMidpoint(coords) {
+        if (!coords || !coords.length) return null;
+        if (coords.length === 1) return [coords[0][0], coords[0][1]];
+        let tot = 0;
+        for (let i = 1; i < coords.length; i++) {
+            tot += Math.hypot(coords[i][0] - coords[i - 1][0], coords[i][1] - coords[i - 1][1]);
+        }
+        if (!tot) return [coords[0][0], coords[0][1]];
+        let half = tot / 2;
+        for (let i = 1; i < coords.length; i++) {
+            const d = Math.hypot(coords[i][0] - coords[i - 1][0], coords[i][1] - coords[i - 1][1]);
+            if (half <= d) {
+                const t = d ? half / d : 0;
+                return [coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * t,
+                        coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * t];
+            }
+            half -= d;
+        }
+        return [coords[coords.length - 1][0], coords[coords.length - 1][1]];
+    }
+
     function distPointToPolyline(lon, lat, coords, cosLat) {
         const px = lon * 111320 * cosLat, py = lat * 111320;
         let best = Infinity;
@@ -1890,6 +1921,9 @@
         return '#' + id;
     }
 
+    // Gli ID delle vie possono arrivare come numero o come testo: confronto tollerante
+    const sameId = (a, b) => a != null && b != null && String(a) === String(b);
+
     // Livello dell'utente (0-based: L1 = 0)
     function userRank() {
         try {
@@ -1956,7 +1990,7 @@
             const failReasons = new Map();
             const targetAlts = anStreet ? [anStreet.id] : [];
             const staleOf = st => Array.isArray(st.alts)
-                ? st.alts.filter(a => a !== pnStreet.id && !targetAlts.includes(a))
+                ? st.alts.filter(a => !sameId(a, pnStreet.id) && !targetAlts.some(t => sameId(t, a)))
                 : [];
 
             // Pre-scansione: c'e' qualcosa di non allineato (vecchi alternativi, doppioni)?
@@ -1998,8 +2032,8 @@
                 const st = segAddressState(id);
                 const known = Array.isArray(st.alts);
                 const stale = staleOf(st);
-                const needPn = st.pn !== pnStreet.id;
-                const anPresent = anStreet && known && st.alts.includes(anStreet.id);
+                const needPn = !sameId(st.pn, pnStreet.id);
+                const anPresent = anStreet && known && st.alts.some(a => sameId(a, anStreet.id));
                 const needAn = !!anStreet && !anPresent;
                 const needClean = cleanMode && stale.length > 0;
 
@@ -2021,15 +2055,17 @@
                     if (needAn) anViaLegacy = legacyAddAlternate(id, anStreet.id);
                 });
 
-                let lastErr = null;
+                let lastErr = null, lastNow = null;
                 for (const run of strategies) {
                     anViaLegacy = false;
                     try { run(); } catch (e) { lastErr = e; continue; }
-                    // verifica: com'e' DAVVERO il segmento adesso?
+                    await tick(); // un respiro: il modello deve digerire la modifica prima della verifica
+                    // verifica: com'e' DAVVERO il segmento adesso? (confronto tollerante sugli ID)
                     const now = segAddressState(id);
-                    const pnOk = now.pn === pnStreet.id;
+                    lastNow = now;
+                    const pnOk = sameId(now.pn, pnStreet.id);
                     const anNow = !anStreet ? true
-                        : (Array.isArray(now.alts) ? now.alts.includes(anStreet.id) : anViaLegacy || anPresent);
+                        : (Array.isArray(now.alts) ? now.alts.some(a => sameId(a, anStreet.id)) : anViaLegacy || anPresent);
                     if (pnOk && (anNow || !needAn)) {
                         applied++;
                         if (needAn) { if (anNow) anOk++; else anManual++; }
@@ -2042,6 +2078,7 @@
                     }
                     lastErr = new Error('il WME non ha registrato la modifica come richiesto');
                 }
+                log('verifica fallita', id, '\u00b7 PN atteso', pnStreet.id, '\u00b7 letto', lastNow && lastNow.pn, '\u00b7 alternativi letti', lastNow && lastNow.alts);
                 return applyReason(lastErr && lastErr.message ? String(lastErr.message) : 'modifica rifiutata dal WME');
             };
 
