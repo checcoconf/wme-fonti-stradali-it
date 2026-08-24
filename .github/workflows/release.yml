@@ -1,0 +1,55 @@
+# .github/workflows/release.yml
+# Versionamento: ANNO.MESE.GIORNO.PROGRESSIVO — il progressivo riparte da 1 ogni giorno
+# (si calcola contando i tag già pubblicati con la data di oggi).
+# A ogni push dello script su main: versione -> iniezione nel file -> .meta.js -> release.
+
+name: Release userscript
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wme-fonti-stradali-it.user.js'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # serve per creare tag e release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (con tutti i tag, servono per il progressivo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calcola la versione AAAA.MM.GG.N (N riparte ogni giorno)
+        id: ver
+        run: |
+          DATE=$(date -u +%Y.%m.%d)
+          LAST=$(git tag -l "v${DATE}.*" | sed -E "s/^v${DATE}\.//" | sort -n | tail -1)
+          N=$(( ${LAST:-0} + 1 ))
+          echo "version=${DATE}.${N}" >> "$GITHUB_OUTPUT"
+          echo "Versione calcolata: ${DATE}.${N}"
+
+      - name: Inietta la versione nello script
+        run: |
+          sed -i -E "s|^// @version .*$|// @version      ${{ steps.ver.outputs.version }}|" wme-fonti-stradali-it.user.js
+          grep -m1 "@version" wme-fonti-stradali-it.user.js
+          node --check wme-fonti-stradali-it.user.js
+
+      - name: Genera il .meta.js (solo metadati, per il check aggiornamenti)
+        run: awk '/==UserScript==/,/==\/UserScript==/' wme-fonti-stradali-it.user.js > wme-fonti-stradali-it.meta.js
+
+      - name: Pubblica la release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          body: |
+            Aggiornamento automatico di WME Fonti Stradali IT.
+            Installa o aggiorna: https://github.com/${{ github.repository }}/releases/latest/download/wme-fonti-stradali-it.user.js
+          files: |
+            wme-fonti-stradali-it.user.js
+            wme-fonti-stradali-it.meta.js
