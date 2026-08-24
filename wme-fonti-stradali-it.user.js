@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.1
-// @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. Di checcoconf.
+// @version      0.0.1.b
+// @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
 // @supportURL   https://github.com/checcoconf/wme-fonti-stradali-it/issues
@@ -277,6 +277,9 @@
 #wfit-panel .wfit-guide ol { margin:4px 0 4px 18px; padding:0; }
 #wfit-panel .wfit-guide li { margin:5px 0; line-height:1.35; }
 #wfit-panel .wfit-guide li::marker { color:var(--wr); font-weight:700; }
+#wfit-panel .wfit-guide p { margin:7px 0; line-height:1.45; }
+#wfit-panel .wfit-guide .wfit-gnum { color:var(--wr); font-weight:800; }
+#wfit-panel .wfit-guide .wfit-key { background:#fff8e6; border:1px solid #eedfb2; border-radius:8px; padding:8px 9px; }
 #wfit-panel .wfit-foot { margin-top:10px; padding-top:6px; border-top:1px dashed #d8d8d8; color:#767c85; font-size:10.5px; }
 #wfit-panel .wfit-actions { display:flex; gap:5px; flex-wrap:wrap; margin-top:4px; }
 #wfit-panel .wfit-hnrev { margin-top:7px; border-top:1px dashed #d8d8d8; padding-top:6px; }
@@ -326,7 +329,7 @@
         const p = document.createElement('div');
         p.id = 'wfit-panel';
         p.innerHTML = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
 
   <h4>Dati ANNCSU</h4>
   <div class="wfit-row">
@@ -384,18 +387,18 @@
   <div id="wfit-results" class="wfit-muted">Qui appariranno via/contrada, localit&agrave;, comune e i civici agganciati. Scarica la regione e cattura qualche segmento per iniziare.</div>
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
-    <ol>
-      <li><b>Scarica la tua regione</b> (una volta sola): i civici ufficiali ANNCSU restano salvati in locale, anche ai prossimi avvii.</li>
-      <li><b>ALT + clic sui segmenti</b>: si evidenziano sulla mappa (tratteggio colorato: scegli la tinta in "Evidenzia") ed entrano in lista. Ri-clic (o la &times; sul chip) per toglierli; clic sul chip per ritrovarli nell'editor.</li>
-      <li><b>Leggi i risultati</b>: per ogni odonimo vedi comune, localit&agrave;/contrada, distanza e i civici colorati sulla mappa (343/A, 343/C&hellip;).</li>
-      <li><b>Correggi il nome nella casella</b> se serve (es. "Strada Contrada&hellip;" &rarr; "Contrada&hellip;": lo script memorizza la tua regola), poi <b>Applica ai segmenti</b> e <b>salva</b>. Se sul segmento ci sono alternativi non conformi, lo script te li elenca e, <b>solo se confermi</b>, li rimuove riallineando tutto. Fuori centro abitato vale la regola IT: PN senza citt&agrave; + AN con citt&agrave;.</li>
-      <li>Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul pallino, spunti solo quelli giusti, <b>correggi il numero nella casella</b> se Street View dice altro (18 &rarr; 18/B), o aggiungi un civico tuo con "+ Aggiungi al centro mappa". I civici gi&agrave; presenti su Waze vengono marcati "gi&agrave; su Waze" e deselezionati da soli. Poi "Inserisci" e salva.</li>
-      <li><b>Se il salvataggio segnala errori sui civici</b>: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono giusti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; quel civico va messo a mano (piazzalo vicino alla strada e trascinalo sul punto reale). Se un civico viene rifiutato, il riepilogo ti dice la causa in chiaro: <b>lock</b> (strada bloccata sopra il tuo livello &rarr; serve un unlock) oppure stradina pi&ugrave; vicina <b>senza nome o non mappata</b> (nominala/mappala prima).</li>
-    </ol>
-    <div class="wfit-muted">Lo script tocca solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l\'elenco modifiche prima di salvare</b>.</div>
+    <p><span class="wfit-gnum">1 &middot; Scarica i dati (una volta sola).</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii; "Svuota tutti i dati salvati" riparte da zero.</p>
+    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell'editor. Dal menu <b>Cattura</b> puoi usare un altro tasto (MAIUSC, CTRL/&#8984; &mdash; attenzione: il WME lo usa per la multi-selezione), la modalit&agrave; "Sempre" o spegnerla e usare "Aggiungi selezione attuale". I chip rossi indicano i segmenti dove l'ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Con <b>Civici sulla mappa</b> vedi i punti etichettati (343, 343/A&hellip;). Se togli segmenti dalla lista, risultati e mappa si riallineano da soli.</p>
+    <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;) o <b>Dentro</b> (PN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
+    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico; il numero &egrave; modificabile e si normalizza da solo (18b &rarr; 18/B); i civici oltre <b>45 m</b> dalla strada vengono esclusi (Waze li rifiuterebbe); quelli gi&agrave; presenti compaiono come <b>"gi&agrave; su Waze"</b> e si deselezionano da soli; con <b>"+ Aggiungi al centro mappa"</b> inserisci un civico letto su Street View nel punto dove hai centrato la mappa. Confermi con "Inserisci" (lotti da 50) e salvi. Servono una strada <b>con nome</b> e nessuna modifica pendente: se manca qualcosa, lo script te lo dice prima.</p>
+    <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
+    <p class="wfit-key"><span class="wfit-gnum">7 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
+    <div class="wfit-muted">Lo script modifica solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l'elenco modifiche prima di salvare</b>.</div>
+    <p>&#128172; Info, idee o problemi? Scrivimi su <b>Slack</b>: <b>checcoconf</b>.</p>
   </details>
 
-  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; creato da <b>${AUTORE}</b> &middot; dati: ANNCSU (Istat / Agenzia delle Entrate), open data.</div>
+  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; creato da <b>${AUTORE}</b> &middot; dati: ANNCSU (Istat / Agenzia delle Entrate), open data &middot; info: Slack <b>checcoconf</b>.</div>
   <div class="wfit-toast" id="wfit-toast"></div>`;
         tabPane.appendChild(p);
 
@@ -1791,8 +1794,7 @@
                             cnt.other++;
                         }
                         if (cnt.lock) {
-                            const m = `non hai i permessi: strada bloccata a livello L${maxLv + 1}` +
-                                (ur != null ? ` (tu sei L${ur + 1})` : '') + ' \u2014 chiedi un unlock alla community';
+                            const m = 'non hai i permessi su questa strada (bloccata sopra il tuo livello): chiedi lo sblocco alla community';
                             reasons[m] = (reasons[m] || 0) + cnt.lock;
                         }
                         if (cnt.unnamed) {
