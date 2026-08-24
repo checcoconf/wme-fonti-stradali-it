@@ -19,7 +19,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (con i tag: servono per capire se la versione e' gia' uscita)
+      - name: Checkout con tutti i tag (per capire se la versione e' gia' uscita)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
