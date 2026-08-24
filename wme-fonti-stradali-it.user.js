@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.2.b
-// @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. Di checcoconf.
+// @version      0.0.3.b
+// @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
 // @supportURL   https://github.com/checcoconf/wme-fonti-stradali-it/issues
@@ -234,18 +234,18 @@
 
     const CSS = `
 #wfit-panel { --wg:#009246; --ww:#f4f4f2; --wr:#ce2b37; --blu:#0b5ed7; --ink:#22262c; font-size:12px; color:var(--ink);
-  container-type:inline-size; max-width:100%; overflow-x:hidden; }
+  container-type:inline-size; max-width:100%; overflow-x:hidden; padding:4px 10px 18px; }
 #wfit-panel, #wfit-panel * { box-sizing:border-box; }
 #wfit-panel select, #wfit-panel input { max-width:100%; min-width:0; }
 #wfit-panel .wfit-res, #wfit-panel .wfit-box { word-break:break-word; overflow-wrap:anywhere; }
-#wfit-panel h4 { display:flex; align-items:center; gap:6px; margin:12px 0 5px; font-size:11.5px; font-weight:700;
+#wfit-panel h4 { display:flex; align-items:center; gap:6px; margin:15px 0 9px; font-size:11.5px; font-weight:700;
   text-transform:uppercase; letter-spacing:.6px; color:#333; border-bottom:2px solid;
   border-image:linear-gradient(90deg,var(--wg) 33%,#c9c9c9 33% 66%,var(--wr) 66%) 1; padding-bottom:3px; }
-#wfit-panel .wfit-row { display:flex; gap:5px; align-items:center; margin:5px 0; flex-wrap:wrap; }
-#wfit-panel input[type=number], #wfit-panel select { flex:1; min-width:60px; padding:4px 6px; border:1px solid #ccc;
+#wfit-panel .wfit-row { display:flex; gap:6px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+#wfit-panel input[type=number], #wfit-panel input[type=text], #wfit-panel select { flex:1; min-width:60px; padding:6px 8px; border:1px solid #ccc;
   border-radius:7px; font-size:12px; background:#fff; transition:border-color .15s; }
 #wfit-panel input:focus, #wfit-panel select:focus { border-color:var(--blu); outline:none; }
-#wfit-panel button.wfit-btn { border:1px solid #c3c3c3; background:#fafafa; border-radius:7px; padding:4px 9px; cursor:pointer;
+#wfit-panel button.wfit-btn { border:1px solid #c3c3c3; background:#fafafa; border-radius:8px; padding:6px 11px; cursor:pointer;
   font-size:12px; transition:background .15s, box-shadow .15s, transform .05s; }
 #wfit-panel button.wfit-btn:hover { background:#f0f0f0; box-shadow:0 1px 3px rgba(0,0,0,.12); }
 #wfit-panel button.wfit-btn:active { transform:translateY(1px); }
@@ -253,13 +253,13 @@
 #wfit-panel button.wfit-primary { background:linear-gradient(135deg,#1266e3,#0a4fc0); border-color:#0a4fc0; color:#fff; font-weight:600; }
 #wfit-panel button.wfit-primary:hover { background:linear-gradient(135deg,#0f5cd0,#0946ab); }
 #wfit-panel .wfit-muted { color:#767c85; font-size:11px; }
-#wfit-panel .wfit-box { background:#f5f8f5; border:1px solid #e2e9e2; border-radius:8px; padding:6px 7px; }
+#wfit-panel .wfit-box { background:#f5f8f5; border:1px solid #e2e9e2; border-radius:9px; padding:8px 9px; }
 #wfit-panel .wfit-chip { display:inline-block; background:#eaf3ea; border:1px solid #c6d9c6; border-radius:999px;
   padding:1px 5px 1px 8px; margin:1px 2px; font-size:10px; cursor:pointer; white-space:nowrap; transition:background .15s; }
 #wfit-panel .wfit-chip:hover { background:#dcecdc; }
 #wfit-panel .wfit-chip.wfit-bad { background:#fdecec; border-color:#e5a3a3; }
 #wfit-panel .wfit-x { color:#b23a3a; margin-left:4px; cursor:pointer; font-weight:bold; }
-#wfit-panel .wfit-res { border:1px solid #e3e3e3; border-left:5px solid var(--wg); border-radius:9px; padding:7px 8px; margin:7px 0;
+#wfit-panel .wfit-res { border:1px solid #e3e3e3; border-left:5px solid var(--wg); border-radius:10px; padding:9px 10px; margin:9px 0;
   background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.07); }
 #wfit-panel .wfit-name-in { width:100%; box-sizing:border-box; font-weight:650; font-size:13px; padding:4px 7px;
   border:1px solid #bbb; border-radius:7px; margin:4px 0 2px; }
@@ -269,8 +269,12 @@
 #wfit-panel .wfit-toast { position:sticky; bottom:0; background:#24282e; color:#fff; padding:6px 9px; border-radius:8px;
   margin-top:8px; display:none; box-shadow:0 2px 8px rgba(0,0,0,.25); }
 #wfit-panel progress { width:100%; height:8px; border-radius:4px; }
-#wfit-panel details { margin:6px 0; } #wfit-panel summary { cursor:pointer; }
-#wfit-panel .wfit-head { display:flex; align-items:center; gap:8px; margin-top:6px; }
+#wfit-panel details { margin:8px 0; } #wfit-panel summary { cursor:pointer; padding:2px 0; }
+#wfit-panel .wfit-head { display:flex; align-items:center; gap:9px; margin:8px 0 2px; padding:9px 11px;
+  background:linear-gradient(135deg,#fafcf9,#f2f6f2); border:1px solid #e2e8e2; border-radius:12px; }
+#wfit-panel .wfit-sec { background:#fff; border:1px solid #e8e8e8; border-radius:12px; padding:11px 12px 12px;
+  margin:11px 0; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+#wfit-panel .wfit-sec > h4:first-child { margin-top:0; }
 #wfit-panel .wfit-head .t { font-size:15px; font-weight:800; letter-spacing:.2px; }
 #wfit-panel .wfit-head .by { font-size:10.5px; color:#767c85; margin-top:-2px; }
 #wfit-panel .wfit-ver { background:#eef1f5; border:1px solid #dde2e9; color:#5a6270; border-radius:999px; font-size:9.5px; padding:0 6px; margin-left:auto; }
@@ -329,8 +333,9 @@
         const p = document.createElement('div');
         p.id = 'wfit-panel';
         p.innerHTML = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
 
+  <div class="wfit-sec">
   <h4>Dati ANNCSU</h4>
   <div class="wfit-row">
     <select id="wfit-regione">${REGIONI.map(r => `<option value="${r[0]}">${r[1]}</option>`).join('')}</select>
@@ -341,7 +346,9 @@
   <details><summary class="wfit-muted">Altre opzioni dati</summary>
     <div class="wfit-row"><button class="wfit-btn" id="wfit-svuota-cache">Svuota tutti i dati salvati</button></div>
   </details>
+  </div>
 
+  <div class="wfit-sec">
   <h4>Segmenti</h4>
   <div class="wfit-row">
     <label>Cattura</label>
@@ -382,9 +389,13 @@
     <label><input type="radio" name="wfit-am" id="wfit-am-urb" value="urb"> Dentro il centro abitato (PN con citt&agrave;)</label>
   </div>
   <div class="wfit-row"><button class="wfit-btn wfit-primary" id="wfit-analizza" style="flex:1">&#128269; Confronta con ANNCSU</button></div>
+  </div>
 
+  <div class="wfit-sec">
   <h4>Risultati</h4>
   <div id="wfit-results" class="wfit-muted">Qui appariranno via/contrada, localit&agrave;, comune e i civici agganciati. Scarica la regione e cattura qualche segmento per iniziare.</div>
+
+  </div>
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
     <p><span class="wfit-gnum">1 &middot; Scarica i dati (una volta sola).</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii; "Svuota tutti i dati salvati" riparte da zero.</p>
@@ -398,7 +409,7 @@
     <p>&#128172; Info, idee o problemi? Scrivimi su <b>Slack</b>: <b>checcoconf</b>.</p>
   </details>
 
-  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; creato da <b>${AUTORE}</b> &middot; dati: ANNCSU (Istat / Agenzia delle Entrate), open data &middot; info: Slack <b>checcoconf</b>.</div>
+  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; a cura di <b>${AUTORE}</b> &middot; dati: ANNCSU (Istat / Agenzia delle Entrate), open data &middot; info: Slack <b>checcoconf</b>.</div>
   <div class="wfit-toast" id="wfit-toast"></div>`;
         tabPane.appendChild(p);
 
