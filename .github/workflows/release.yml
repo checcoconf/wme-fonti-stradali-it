@@ -1,7 +1,7 @@
 # .github/workflows/release.yml
-# Versionamento: ANNO.MESE.GIORNO.PROGRESSIVO — il progressivo riparte da 1 ogni giorno
-# (si calcola contando i tag già pubblicati con la data di oggi).
-# A ogni push dello script su main: versione -> iniezione nel file -> .meta.js -> release.
+# Versionamento MANUALE: la versione la decidi tu nella riga "// @version" dello script.
+# A ogni push su main la Action la legge: se quel numero non e' mai stato rilasciato,
+# pubblica la release v<versione>; se esiste gia', non fa nulla (alza @version per pubblicare).
 
 name: Release userscript
 
@@ -19,36 +19,45 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (con tutti i tag, servono per il progressivo)
+      - name: Checkout (con i tag: servono per capire se la versione e' gia' uscita)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Calcola la versione AAAA.MM.GG.N (N riparte ogni giorno)
+      - name: Leggi la versione dalla riga @version dello script
         id: ver
         run: |
-          DATE=$(date -u +%Y.%m.%d)
-          LAST=$(git tag -l "v${DATE}.*" | sed -E "s/^v${DATE}\.//" | sort -n | tail -1)
-          N=$(( ${LAST:-0} + 1 ))
-          echo "version=${DATE}.${N}" >> "$GITHUB_OUTPUT"
-          echo "Versione calcolata: ${DATE}.${N}"
+          V=$(grep -m1 -E "^// @version" wme-fonti-stradali-it.user.js | sed -E "s|^// @version[[:space:]]+||" | tr -d "[:space:]")
+          if [ -z "$V" ]; then echo "::error::riga @version non trovata nello script"; exit 1; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Versione nel file: $V"
 
-      - name: Inietta la versione nello script
+      - name: La versione e' gia' stata rilasciata?
+        id: chk
         run: |
-          sed -i -E "s|^// @version .*$|// @version      ${{ steps.ver.outputs.version }}|" wme-fonti-stradali-it.user.js
-          grep -m1 "@version" wme-fonti-stradali-it.user.js
-          node --check wme-fonti-stradali-it.user.js
+          if git rev-parse -q --verify "refs/tags/v${{ steps.ver.outputs.version }}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v${{ steps.ver.outputs.version }} gia' esistente: nessuna release. Alza @version nello script per pubblicare."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verifica sintassi
+        if: steps.chk.outputs.exists == 'false'
+        run: node --check wme-fonti-stradali-it.user.js
 
       - name: Genera il .meta.js (solo metadati, per il check aggiornamenti)
+        if: steps.chk.outputs.exists == 'false'
         run: awk '/==UserScript==/,/==\/UserScript==/' wme-fonti-stradali-it.user.js > wme-fonti-stradali-it.meta.js
 
       - name: Pubblica la release
+        if: steps.chk.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: v${{ steps.ver.outputs.version }}
           body: |
-            Aggiornamento automatico di WME Fonti Stradali IT.
+            WME Fonti Stradali IT ${{ steps.ver.outputs.version }}.
             Installa o aggiorna: https://github.com/${{ github.repository }}/releases/latest/download/wme-fonti-stradali-it.user.js
           files: |
             wme-fonti-stradali-it.user.js

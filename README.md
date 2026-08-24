@@ -35,9 +35,9 @@ La guida completa è nel pannello dello script ("Come funziona").
 ## Sviluppo e rilasci
 
 - Lo script vive in `wme-fonti-stradali-it.user.js` (root del repo).
-- Ogni push su `main` che tocca lo script pubblica una release automatica con versione
-  `AAAA.MM.GG.N` (N riparte ogni giorno). Per lavorare senza rilasciare, usa un branch
-  (es. `dev`) e fai merge su `main` quando è pronto.
+- Il versionamento è **manuale**: alza la riga `// @version` nello script (es. `0.0.1` → `0.0.2`)
+  e fai push su `main`: la CI pubblica la release `v<versione>`. Se fai push senza alzare la
+  versione, non viene pubblicato nulla.
 - Il file `.meta.js` è generato dalla CI: **non** va committato.
 
 ## Licenza
