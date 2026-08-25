@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.4.b
+// @version      0.0.5.b
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -382,7 +382,7 @@
     </select>
   </div>
   <div class="wfit-row">
-    <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="20" max="2000" step="10" style="max-width:70px">
+    <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="1" max="2000" step="1" style="max-width:70px" title="Distanza massima civico-segmento per il confronto. Nota: i punti ANNCSU stanno su edifici/ingressi, spesso 5-20 m dall'asse strada: sotto i ~10 m potresti perdere civici legittimi.">
     <label><input type="checkbox" id="wfit-titlecase"> Formato Waze</label>
   </div>
   <div class="wfit-row">
@@ -452,7 +452,7 @@
         if (settings.reg) ui.regione.value = settings.reg;
 
         ui.regione.addEventListener('change', () => { settings.reg = ui.regione.value; saveSettings(); });
-        ui.raggio.addEventListener('change', () => { settings.raggio = Math.max(20, parseInt(ui.raggio.value, 10) || 150); saveSettings(); });
+        ui.raggio.addEventListener('change', () => { settings.raggio = Math.min(2000, Math.max(1, parseInt(ui.raggio.value, 10) || 150)); saveSettings(); });
         ui.titlecase.addEventListener('change', () => { settings.titleCase = ui.titlecase.checked; saveSettings(); renderResults(lastResults); });
         ui.capmode.addEventListener('change', () => { settings.captureMode = ui.capmode.value; saveSettings(); toast(capModeLabel()); });
         ui.hlcolor.addEventListener('change', () => { settings.hlColor = ui.hlcolor.value; saveSettings(); refreshMapLayer(); });
@@ -1651,6 +1651,16 @@
             toast(`Tutti i ${cand.all.length} civici di questo odonimo sono oltre ${HN_MAX_D} m dalla strada: Waze li rifiuterebbe al salvataggio. Vanno inseriti a mano (piazzali vicino alla strada e trascinali sul punto reale).`, 12000);
             return;
         }
+        // ordina per numero civico (poi per esponente): il giro di verifica segue la strada,
+        // non la distanza dal segmento
+        const hnKey = lbl => {
+            const m = /^(\d+)\s*\/?\s*(.*)$/.exec(String(lbl || '')) || [];
+            return [parseInt(m[1] || '0', 10), m[2] || ''];
+        };
+        cand.list.sort((a, b) => {
+            const ka = hnKey(a.label), kb = hnKey(b.label);
+            return (ka[0] - kb[0]) || ka[1].localeCompare(kb[1]);
+        });
         const shown = cand.list.slice(0, 50);
 
 
@@ -1659,7 +1669,7 @@
         const head = document.createElement('div');
         head.className = 'wfit-muted';
         head.innerHTML = `<b>Controlla e conferma</b> \u00b7 ${shown.length} civic${shown.length === 1 ? 'o' : 'i'} pront${shown.length === 1 ? 'o' : 'i'}` +
-            (cand.list.length > 50 ? ' (primi 50 per distanza: il resto al giro dopo)' : '') +
+            (cand.list.length > 50 ? ' (primi 50 in ordine di numero: il resto al giro dopo)' : '') +
             (cand.tooFar ? ` \u00b7 ${cand.tooFar} oltre ${HN_MAX_D} m esclusi` : '') +
             ` \u00b7 numero modificabile \u00b7 <a href="javascript:void(0)" data-a="all">tutti</a> / <a href="javascript:void(0)" data-a="none">nessuno</a>`;
         box.appendChild(head);
