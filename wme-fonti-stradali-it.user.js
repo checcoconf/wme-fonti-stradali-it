@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.3.b
+// @version      0.0.4.b
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -36,6 +36,7 @@
     const VERSION = (typeof GM_info !== 'undefined' && GM_info.script) ? GM_info.script.version : 'dev';
     const STORE_KEY = 'wmeFontiIT_v3';
     const GRID_CELL = 0.004; // ~440 m in latitudine
+    const STALE_DAYS = 35; // ANNCSU aggiorna i dataset regionali con cadenza mensile: oltre questa soglia, avviso (mai scarico automatico)
     const ANNCSU_DL = 'https://anncsu.open.agenziaentrate.gov.it/age-inspire/opendata/anncsu/getds.php?INDIR_';
     const ISTAT_COMUNI = 'https://www.istat.it/storage/codici-unita-amministrative/Elenco-comuni-italiani.csv';
 
@@ -200,9 +201,14 @@
             const regs = await idb.all('regioni');
             if (regs.length) {
                 rebuildMemory(regs);
-                let s = `Cache pronta: ${fmtN(mem.n)} civici (${regs.map(r => r.nomeReg || r.reg).join(', ')}).`;
+                let s = `Cache pronta: ${fmtN(mem.n)} civici (${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsFreshnessLabel(regs)}`;
                 if (regs.some(r => !r.pv || r.pv < 8)) {
                     s += ` <span style="color:#c60"><b>Cache di una versione precedente: mancano le lettere dei civici (es. 343/A). Premi "Scarica regione" per rigenerarla.</b></span>`;
+                }
+                // Il conteggio giorni sopra e' sempre visibile; qui solo la spiegazione, e solo
+                // quando almeno una regione ha superato la soglia (MAI uno scarico automatico).
+                if (regs.some(r => r.quando && (Date.now() - r.quando) / 86400000 > STALE_DAYS)) {
+                    s += ` <span class="wfit-muted">ANNCSU aggiorna i dataset regionali con cadenza mensile: quando vuoi, "Scarica regione" prende i dati pi\u00f9 freschi.</span>`;
                 }
                 status(s);
             } else {
@@ -398,7 +404,7 @@
   </div>
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
-    <p><span class="wfit-gnum">1 &middot; Scarica i dati (una volta sola).</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii; "Svuota tutti i dati salvati" riparte da zero.</p>
+    <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia solo una parte &egrave; ancora geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). "Svuota tutti i dati salvati" riparte da zero.</p>
     <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell'editor. Dal menu <b>Cattura</b> puoi usare un altro tasto (MAIUSC, CTRL/&#8984; &mdash; attenzione: il WME lo usa per la multi-selezione), la modalit&agrave; "Sempre" o spegnerla e usare "Aggiungi selezione attuale". I chip rossi indicano i segmenti dove l'ultimo Applica &egrave; fallito.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Con <b>Civici sulla mappa</b> vedi i punti etichettati (343, 343/A&hellip;). Se togli segmenti dalla lista, risultati e mappa si riallineano da soli.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;) o <b>Dentro</b> (PN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
@@ -488,6 +494,31 @@
     function endBusy() { busy = false; if (ui.scarica) ui.scarica.disabled = false; setProgress(null); }
     const fmtN = n => n.toLocaleString('it-IT');
 
+    // Riepilogo "Regione: DD/MM/AAAA" per le regioni di cui conosciamo la data del dataset
+    function regionsDateLabel(regs) {
+        const withDate = regs.filter(r => r.fileDate);
+        if (!withDate.length) return '';
+        return ' &middot; dataset del: ' + withDate.map(r => `${r.nomeReg || r.reg} ${r.fileDate}`).join(', ');
+    }
+
+    // Data del dataset + giorni trascorsi dal TUO scarico, per ogni regione, SEMPRE mostrati
+    // (non solo oltre soglia): il numero lo vedi comunque, il colore/grassetto scatta solo
+    // oltre STALE_DAYS come promemoria visivo. Nessuno scarico automatico: decidi tu leggendo il numero.
+    function regionsFreshnessLabel(regs) {
+        const parts = regs.map(r => {
+            const bits = [];
+            if (r.fileDate) bits.push(`dataset del ${r.fileDate}`);
+            if (r.quando) {
+                const giorni = Math.floor((Date.now() - r.quando) / 86400000);
+                const txt = `scaricata ${giorni} giorn${giorni === 1 ? 'o' : 'i'} fa`;
+                bits.push(giorni > STALE_DAYS ? `<b style="color:#b36b00">${txt}</b>` : txt);
+            }
+            if (!bits.length) return r.nomeReg || r.reg;
+            return `${r.nomeReg || r.reg} (${bits.join(', ')})`;
+        });
+        return parts.length ? ' &middot; ' + parts.join('; ') : '';
+    }
+
     /* ------------------------------------------------------------------ */
     /* Elenco comuni ISTAT (solo per tradurre Belfiore -> nome comune)     */
     /* ------------------------------------------------------------------ */
@@ -544,8 +575,23 @@
         status(`Scarico indirizzario ${regNome(reg)}\u2026`);
         const buf = await gmFetchBinary(ANNCSU_DL + reg, p => { setProgress(p * 45); status(`Scarico indirizzario ${regNome(reg)}\u2026 ${Math.round(p * 100)}%`); });
         status(`Elaboro ${regNome(reg)}\u2026`);
+
+        // Nome del file CSV dentro lo ZIP: l'Agenzia ci scrive la data di creazione dell'estratto
+        // (non e' una colonna del CSV, va letta li'). Se il pattern cambia, il nome grezzo resta in console.
+        let fileName = null, fileDate = null;
+        try {
+            const u8peek = new Uint8Array(buf);
+            if (u8peek.length > 4 && u8peek[0] === 0x50 && u8peek[1] === 0x4b) {
+                fileName = findZipEntry(u8peek).name;
+                fileDate = extractDateFromFilename(fileName);
+            }
+        } catch (e) { /* niente data, non e' bloccante */ }
+        log('file dentro lo zip:', fileName, '\u00b7 data riconosciuta:', fileDate || '(pattern non riconosciuto)');
+
         const rec = await parseIndirToRecord(new Uint8Array(buf), reg, regNome(reg),
             (p, read, kept) => { setProgress(45 + p * 55); status(`Elaboro ${regNome(reg)}\u2026 ${Math.round(p * 100)}% &middot; lette ${fmtN(read)} &middot; con coordinate ${fmtN(kept)}`); });
+        rec.fileName = fileName;
+        rec.fileDate = fileDate;
         if (!rec.count) {
             status(`<span style="color:#c00">Nessun civico con coordinate riconosciuto in ${regNome(reg)}.</span> Prima riga del file (per diagnosi) in console.`);
             log('DIAGNOSI prima riga dati:', rec.diag || '(vuota)');
@@ -557,8 +603,8 @@
         rebuildMemory(regs);
         endBusy();
         const mb = (mem.n * 14 / 1048576).toFixed(0);
-        status(`Pronto: <b>${fmtN(mem.n)}</b> civici in memoria (~${mb} MB, ${regs.map(r => r.nomeReg || r.reg).join(', ')}). Cache locale: al prossimo avvio &egrave; gi&agrave; tutto caricato.`);
-        toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.`);
+        status(`Pronto: <b>${fmtN(mem.n)}</b> civici in memoria (~${mb} MB, ${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsDateLabel(regs)} Cache locale: al prossimo avvio &egrave; gi&agrave; tutto caricato.`);
+        toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (fileDate ? ` Dataset del ${fileDate}.` : ''));
     }
 
     // Legge lo ZIP (o CSV) e produce un record compatto: Float32 lon/lat + id gruppo per civico,
@@ -678,6 +724,18 @@
     /* Lettore ZIP autonomo (niente librerie esterne):                     */
     /* central directory + DecompressionStream('deflate-raw')              */
     /* ------------------------------------------------------------------ */
+
+    // La data del dataset non e' una colonna del CSV: l'Agenzia la scrive nel NOME del file
+    // dentro lo ZIP. Proviamo i pattern piu' comuni; se nessuno combacia restituiamo null
+    // (il nome grezzo resta comunque in console per una verifica manuale).
+    function extractDateFromFilename(name) {
+        if (!name) return null;
+        let m = /(20\d{2})[-_]?(0[1-9]|1[0-2])[-_]?(0[1-9]|[12]\d|3[01])(?!\d)/.exec(name);
+        if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+        m = /(0[1-9]|[12]\d|3[01])[-_]?(0[1-9]|1[0-2])[-_]?(20\d{2})(?!\d)/.exec(name);
+        if (m) return `${m[1]}/${m[2]}/${m[3]}`;
+        return null;
+    }
 
     function findZipEntry(u8) {
         const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
@@ -840,7 +898,7 @@
         let base = 0;
         for (const r of regionRecords) {
             const gOff = groups.length;
-            for (const g of r.groups) groups.push(g);
+            for (const g of r.groups) groups.push([g[0], g[1], g[2], r.fileDate || null]);
             lons.set(new Float32Array(r.lons), base);
             lats.set(new Float32Array(r.lats), base);
             if (r.civn) civn.set(new Uint16Array(r.civn), base);
@@ -1257,8 +1315,8 @@
 
         lastResults = [...results.entries()]
             .map(([g, r]) => {
-                const [den, loc, bel] = mem.groups[g];
-                return { g, name: den, locality: loc, comune: belNome.get(bel) || bel, dist: r.dist, count: r.count };
+                const [den, loc, bel, fileDate] = mem.groups[g];
+                return { g, name: den, locality: loc, comune: belNome.get(bel) || bel, dist: r.dist, count: r.count, fileDate };
             })
             .sort((a, b) => a.dist - b.dist)
             .slice(0, 8);
@@ -1411,7 +1469,8 @@
             const info = document.createElement('div');
             info.innerHTML = `<span class="wfit-muted">Comune: <b>${escapeHtml(r.comune)}</b>` +
                 (r.locality ? ` &middot; Localit&agrave;: ${escapeHtml(toWazeCase(r.locality))}` : '') +
-                ` &middot; ~${Math.round(r.dist)} m &middot; ${r.count} civic${r.count === 1 ? 'o' : 'i'}</span>`;
+                ` &middot; ~${Math.round(r.dist)} m &middot; ${r.count} civic${r.count === 1 ? 'o' : 'i'}` +
+                (r.fileDate ? ` &middot; dati ANNCSU del ${r.fileDate}` : '') + `</span>`;
             div.appendChild(info);
 
             const readName = () => {
@@ -2250,7 +2309,7 @@
 
     // Hook per test automatici fuori dal browser (in WME "module" non esiste: blocco inerte)
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { parseItFloat, detectMapping, findZipEntry, zipCsvLines, plainCsvLines, parseIndirToRecord };
+        module.exports = { parseItFloat, detectMapping, findZipEntry, zipCsvLines, plainCsvLines, parseIndirToRecord, extractDateFromFilename };
     }
 
 })();
