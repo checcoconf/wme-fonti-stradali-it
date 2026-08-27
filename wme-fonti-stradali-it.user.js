@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.9.b
+// @version      0.0.10.b
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -105,6 +105,11 @@
     settings.captureKey = normKeyChoice(settings.captureKey);
     if (settings.captureMode === 'custom' && !settings.captureKey) settings.captureMode = 'alt';
     if (!settings.applyMode) settings.applyMode = 'extra';
+    // come trattare i civici in forma numero/numero (20/1, 20/2): 'nonins' (predefinito: restano
+    // in lista ma non vengono inseriti), 'includi' (civici normali), 'escludi' (fuori dalla lista)
+    if (settings.suspMode === 'blocca') settings.suspMode = 'nonins';     // migrazione
+    if (settings.suspMode === 'nascondi') settings.suspMode = 'escludi';  // migrazione
+    if (!['nonins', 'includi', 'escludi'].includes(settings.suspMode)) settings.suspMode = 'nonins';
     const saveSettings = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* ignora */ } };
     const log = (...a) => console.log(`${SCRIPT_NAME}:`, ...a);
 
@@ -248,6 +253,13 @@
                 if (regs.some(r => !r.pv || r.pv < 9)) {
                     s += ` <span style="color:#c60"><b>Cache di una versione precedente: gli esponenti dei civici possono mancare o essere incompleti (es. 343/A, 20/1). Premi "Scarica regione" per rigenerarla.</b></span>`;
                 }
+                // colonna esponente sospetta: si vede nel pannello, non solo nel log
+                const bad = regs.filter(r => r.espShare > 0.5);
+                if (bad.length) {
+                    s += ` <span style="color:#c60"><b>Colonna esponente sospetta in ${bad.map(r => r.nomeReg || r.reg).join(', ')}:`
+                       + ` ${(bad[0].espShare * 100).toFixed(0)}% dei civici ne ha uno`
+                       + `${bad[0].espTop ? ` (${bad[0].espTop})` : ''}. I numeri tipo "1/3" potrebbero non essere reali.</b></span>`;
+                }
                 // Il conteggio giorni sopra e' sempre visibile; qui solo la spiegazione, e solo
                 // quando almeno una regione ha superato la soglia (MAI uno scarico automatico).
                 if (regs.some(r => r.quando && (Date.now() - r.quando) / 86400000 > STALE_DAYS)) {
@@ -350,10 +362,32 @@
 #wfit-panel .wfit-actions { display:flex; gap:5px; flex-wrap:wrap; margin-top:4px; }
 #wfit-panel .wfit-hnrev { margin-top:7px; border-top:1px dashed #d8d8d8; padding-top:6px; }
 #wfit-panel .wfit-hnrev .wfit-hnlist { max-height:260px; overflow:auto; margin:4px 0; border:1px solid #eee; border-radius:7px; padding:3px 4px; }
-#wfit-panel .wfit-hnrow { display:flex; align-items:center; gap:6px; padding:2px 3px; border-radius:5px; cursor:pointer; }
-#wfit-panel .wfit-hnrow:hover { background:#eef4ff; }
-#wfit-panel .wfit-hndup { background:#fff8e6; border-left:3px solid #e8b530; padding-left:4px; }
-#wfit-panel .wfit-hndup:hover { background:#fdf0d0; }
+/* riga civico: prima fascia con spunta+numero+distanza, sotto la nota quando serve.
+   Il bordo colorato a sinistra e' l'unico segnale di stato: niente sfondi pieni, che
+   nel pannello stretto facevano l'effetto insegna luminosa. */
+#wfit-panel .wfit-hnrow { padding:3px 4px 3px 7px; border-radius:6px; cursor:pointer; border-left:3px solid transparent; }
+#wfit-panel .wfit-hnrow:hover { background:#f2f6fc; }
+#wfit-panel .wfit-hntop { display:flex; align-items:center; gap:7px; min-width:0; }
+#wfit-panel .wfit-hnd { flex:1; min-width:0; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+#wfit-panel .wfit-hnnote { display:none; margin:1px 0 0 24px; font-size:11px; line-height:1.35; color:#6a7078; }
+#wfit-panel .wfit-n-warn { color:#a32b2b; font-weight:600; }
+#wfit-panel .wfit-n-dup  { color:#8a6100; }
+#wfit-panel .wfit-n-waze { color:#2c6791; }
+#wfit-panel .wfit-n-ok   { color:#2f7a44; }
+#wfit-panel .wfit-hndup  { border-left-color:#e8b530; }
+#wfit-panel .wfit-hnwaze { border-left-color:#7fa8c9; opacity:.72; }
+#wfit-panel .wfit-hnsusp { border-left-color:#cc3b3b; background:#fdf4f4; }
+#wfit-panel .wfit-hnok   { border-left-color:#3fa055; }
+/* barra di scelta: segmenti affiancati, non link sparsi nel testo */
+#wfit-panel .wfit-hnsuspbar { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin:5px 0 2px; }
+#wfit-panel .wfit-suspmode { padding:2px 8px; border:1px solid #d3d8de; border-radius:999px; text-decoration:none; color:#5a6068; background:#fff; font-size:11px; }
+#wfit-panel .wfit-suspmode:hover { border-color:#9aa3ad; color:#2b3138; }
+#wfit-panel .wfit-suspmode.wfit-on { background:#2b3138; border-color:#2b3138; color:#fff; font-weight:600; }
+#wfit-panel .wfit-hnleg { display:flex; flex-wrap:wrap; gap:3px 12px; margin:3px 0 0; font-size:11px; }
+#wfit-panel .wfit-swatch { display:inline-block; width:3px; height:11px; border-radius:2px; vertical-align:-2px; margin-right:5px; }
+#wfit-panel .wfit-sw-dup  { background:#e8b530; }
+#wfit-panel .wfit-sw-waze { background:#7fa8c9; }
+#wfit-panel .wfit-sw-susp { background:#cc3b3b; }
 #wfit-panel .wfit-hnrow b { min-width:44px; }
 #wfit-panel .wfit-hnnum { width:70px; min-width:56px; padding:2px 5px; border:1px solid #bbb; border-radius:5px; font-weight:650; font-size:12px; }
 #wfit-panel .wfit-hnnum:focus { border-color:var(--blu); outline:none; }
@@ -827,6 +861,10 @@
         const esps = [''];               // dizionario esponenti: indice 0 = nessuno
         const emap = new Map([['', 0]]);
         let mapping = null, read = 0, diag = '', firstLine = true;
+        // controllo di sanita' sulla colonna esponente: se quasi tutti i civici ne hanno uno,
+        // quasi certamente stiamo leggendo la colonna sbagliata (un progressivo, un codice) e
+        // ogni civico si ritroverebbe un "/n" che nella realta' non esiste
+        let withEsp = 0; const espTally = new Map(); let mapSource = '?';
 
         const espIndex = s => {
             if (!s) return 0;
@@ -848,11 +886,11 @@
                 if (firstLine) {
                     firstLine = false;
                     const hm = detectHeaderMapping(f);
-                    if (hm) { mapping = hm; log('mappatura da intestazione ufficiale:', JSON.stringify(hm)); return; }
+                    if (hm) { mapping = hm; mapSource = 'intestazione ufficiale'; log('mappatura da intestazione ufficiale:', JSON.stringify(hm)); return; }
                 }
                 mapping = detectMapping(f);
                 if (!mapping) { if (!diag) diag = line.slice(0, 300); return; }
-                log('mappatura euristica:', JSON.stringify(mapping));
+                mapSource = 'euristica (nessuna intestazione)'; log('mappatura euristica:', JSON.stringify(mapping));
             }
             read++;
             const lon = parseItFloat(f[mapping.lon]);
@@ -878,14 +916,29 @@
             if (!es && mapping.esp >= 0) es = (f[mapping.esp] || '').trim().toUpperCase();
             civn.push(nc);
             cive.push(espIndex(es));
+            if (es) { withEsp++; espTally.set(es, (espTally.get(es) || 0) + 1); }
         };
 
         const isZip = u8.length > 4 && u8[0] === 0x50 && u8[1] === 0x4b;
         if (isZip) await zipCsvLines(u8, handleLine, p => onProgress && onProgress(p, read, lons.total));
         else await plainCsvLines(u8, handleLine, p => onProgress && onProgress(p, read, lons.total));
 
+        // referto sulla colonna esponente, visibile nel log: serve a smascherare subito una
+        // colonna letta male, che altrimenti si nota solo civico per civico sulla mappa
+        const tot = lons.total || 1;
+        const quota = withEsp / tot;
+        const topEsp = [...espTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+            .map(([v, n]) => `${v} (${n})`).join(', ');
+        log(`esponenti: ${withEsp} civici su ${tot} (${(quota * 100).toFixed(1)}%) \u2014 mappatura ${mapSource}` +
+            (topEsp ? ` \u2014 piu' frequenti: ${topEsp}` : ' \u2014 nessuno'));
+        if (quota > 0.5) {
+            log(`ATTENZIONE: piu' di meta' dei civici risulta avere un esponente. E' molto probabile che ` +
+                `la colonna letta come ESPONENTE sia in realta' un'altra (progressivo o codice interno). ` +
+                `Controlla i valori qui sopra: se sono numeri consecutivi e non lettere, segnala il problema.`);
+        }
         return {
             reg, nomeReg, quando: Date.now(), count: lons.total, read, diag, pv: 9,
+            espShare: quota, espTop: topEsp, mapSource,
             lons: lons.done().buffer,
             lats: lats.done().buffer,
             gids: gids.done().buffer,
@@ -1064,13 +1117,16 @@
             const v = (f[i] || '').trim();
             if (v && /^\d{1,5}[A-Z]?(\/[A-Z0-9]+)?$/i.test(v)) { civ = i; break; }
         }
-        // Esponente: campo corto subito dopo il civico. Sono validi sia alfabetici ("A", "BIS")
-        // sia NUMERICI ("20/1", "20/2"): se qui accettassimo le sole lettere, 20/1 e 20/2
-        // perderebbero l'esponente, diventerebbero due "20" e finirebbero marcati come ripetizioni.
+        // Esponente nel riconoscimento EURISTICO (solo quando manca l'intestazione ufficiale):
+        // qui accettiamo esclusivamente lettere ("A", "BIS") o campo vuoto. Accettare anche le cifre
+        // sarebbe comodo per 20/1 e 20/2, ma da una riga sola non si distingue un vero esponente
+        // numerico da una colonna qualsiasi di numeri (progressivo, codice interno): il risultato
+        // sarebbe appiccicare un "/n" a ogni civico. Gli esponenti numerici arrivano comunque
+        // corretti dalla colonna ESPONENTE quando il file ha l'intestazione, che e' il caso normale.
         let esp = -1;
         if (civ >= 0 && civ + 1 < lon) {
             const v = (f[civ + 1] || '').trim();
-            if (v === '' || /^[A-Za-z0-9]{1,4}$/.test(v)) esp = civ + 1;
+            if (v === '' || /^[A-Za-z]{1,4}$/.test(v)) esp = civ + 1;
         }
         return { bel, den, loc, civ, esp, lon, lat };
     }
@@ -2117,10 +2173,20 @@
             (cand.tooFar ? ` \u00b7 ${cand.tooFar} oltre ${HN_MAX_D} m esclusi` : '') +
             ` \u00b7 numero modificabile \u00b7 <a href="javascript:void(0)" data-a="all">tutti</a> / <a href="javascript:void(0)" data-a="none">nessuno</a>`;
         box.appendChild(head);
+        // legenda dei due motivi per cui una riga arriva senza spunta
+        const legend = document.createElement('div');
+        legend.className = 'wfit-muted wfit-hnleg';
+        legend.style.display = 'none';
+        box.appendChild(legend);
         const listDiv = document.createElement('div');
         listDiv.className = 'wfit-hnlist';
         box.appendChild(listDiv);
         const rows = [];
+        // Un esponente NUMERICO ("2/4", "1/3") e' l'impronta tipica di una colonna del CSV letta
+        // male: un progressivo o un codice interno appiccicato al civico. Puo' anche essere reale,
+        // ma non lo possiamo sapere da qui. Quindi non si inserisce d'ufficio: si segnala e decide
+        // l'utente, che il territorio lo puo' guardare davvero.
+        const isSusp = lbl => /^\d+\s*\/\s*\d+$/.test(String(lbl || '').trim());
         const bGo = document.createElement('button');
         const updateGo = () => {
             const k = rows.filter(x => x.cb.checked).length;
@@ -2129,27 +2195,50 @@
         };
         const addRowEl = p => {
             const row = document.createElement('div');
-            row.className = 'wfit-hnrow' + (p.dup ? ' wfit-hndup' : '');
-            row.title = (p.dup
+            p.susp = !p.manual && isSusp(p.label);
+            row.className = 'wfit-hnrow' + (p.susp && settings.suspMode !== 'includi' ? ' wfit-hnsusp'
+                : p.susp ? ' wfit-hnok' : p.dup ? ' wfit-hndup' : '');
+            row.title = (p.susp
+                ? 'Numero in forma numero/numero ("2/4"): pu\u00f2 essere un civico reale, un intervallo scritto male o una colonna del CSV letta male. Di base non viene inserito. Se sul posto esiste davvero cosi\', spuntalo; per trattarli tutti allo stesso modo usa la barra sopra la lista.'
+                : p.dup
                 ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
                 : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).')
                 + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
             const cb = document.createElement('input');
-            // le ripetizioni arrivano senza spunta: sono da guardare, non da inserire alla cieca
-            cb.type = 'checkbox'; cb.checked = !p.dup;
+            // ripetizioni e numeri in forma 20/1 arrivano senza spunta: restano visibili e
+            // spuntabili a mano, ma di loro iniziativa non finiscono su Waze
+            cb.type = 'checkbox'; cb.checked = !p.dup && !(p.susp && settings.suspMode !== 'includi');
+            if (p.susp && settings.suspMode === 'escludi') row.style.display = 'none';
             const inp = document.createElement('input');
             inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.label;
             inp.addEventListener('input', () => inp.classList.remove('wfit-bad-in'));
-            const dist = document.createElement('span'); dist.className = 'wfit-muted';
-            dist.textContent = p.manual
-                ? 'aggiunto da te'
-                : `~${Math.round(p.d)} m` +
-                  (p.dup ? ` \u00b7 stesso numero, punto ${p.rep} \u00b7 a ${Math.round(p.twinD || 0)} m dal punto 1` : '');
-            row.appendChild(cb); row.appendChild(inp); row.appendChild(dist);
-            row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp) quickCenter(p.lon, p.lat); });
+            // Layout su due righe: sopra spunta, numero e distanza (sempre corti, mai a capo),
+            // sotto la nota solo quando serve. Prima era tutto su una riga sola e in un pannello
+            // stretto il testo si spezzava una parola per riga.
+            const dist = document.createElement('span'); dist.className = 'wfit-muted wfit-hnd';
+            dist.textContent = p.manual ? 'aggiunto da te' : `~${Math.round(p.d)} m`;
+            const top = document.createElement('div'); top.className = 'wfit-hntop';
+            top.appendChild(cb); top.appendChild(inp); top.appendChild(dist);
+            const note = document.createElement('div'); note.className = 'wfit-hnnote';
+            row.appendChild(top); row.appendChild(note);
+            const setNote = (kind, txt) => {
+                note.className = 'wfit-hnnote' + (kind ? ' wfit-n-' + kind : '');
+                note.textContent = txt || '';
+                note.style.display = txt ? '' : 'none';
+            };
+            row.setNote = setNote;
+            if (p.susp) {
+                setNote(settings.suspMode === 'includi' ? 'ok' : 'warn',
+                    settings.suspMode === 'includi' ? 'incluso su tua scelta' : '\u26a0\ufe0f non inserito');
+            } else if (p.dup) {
+                setNote('dup', `stesso numero, punto ${p.rep} \u00b7 ${Math.round(p.twinD || 0)} m dal punto 1`);
+            } else {
+                setNote('', '');
+            }
+            row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp && ev.target.tagName !== 'A') quickCenter(p.lon, p.lat); });
             cb.addEventListener('change', updateGo);
             listDiv.appendChild(row);
-            rows.push({ cb, inp, p, dist });
+            rows.push({ cb, inp, p, dist, row, setNote });
             return row;
         };
         for (const p of shown) addRowEl(p);
@@ -2188,7 +2277,15 @@
         updateGo();
         head.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
             const v = a.dataset.a === 'all';
-            rows.forEach(x => { x.cb.checked = v; });
+            // "tutti" non deve poter aggirare il blocco dei numeri da verificare
+            // "tutti" non tira dentro i numero/numero finche' la modalita' e' "non inserito":
+            // il loro stato lo decidi con la barra sopra, non di rimbalzo
+            let skipped = 0;
+            rows.forEach(x => {
+                if (v && x.p.susp && settings.suspMode !== 'includi') { skipped++; return; }
+                x.cb.checked = v;
+            });
+            if (skipped) toast(`${skipped} numer${skipped === 1 ? 'o' : 'i'} in forma 20/1 non ${skipped === 1 ? 'incluso' : 'inclusi'}: usa "includi" nella barra, oppure spuntal${skipped === 1 ? 'o' : 'i'} a mano.`, 8000);
             updateGo();
         }));
         bNo.addEventListener('click', () => box.remove());
@@ -2214,6 +2311,62 @@
             box.remove();
             runHnInsert(r, sel);
         });
+        const legendBits = [];
+        const refreshLegend = () => {
+            legend.innerHTML = legendBits.join(' \u00b7 ');
+            legend.style.display = legendBits.length ? '' : 'none';
+        };
+        // Scelta in blocco sui numeri in forma numero/numero: la richiesta e' poterli includere o
+        // escludere tutti insieme, senza sbloccarli uno per uno. La scelta resta salvata.
+        const nSusp = shown.filter(p => isSusp(p.label)).length;
+        if (nSusp) {
+            const bar = document.createElement('div');
+            bar.className = 'wfit-muted wfit-hnsuspbar';
+            const label = document.createElement('span');
+            label.innerHTML = `<b>${nSusp}</b> in forma 20/1:`;
+            bar.appendChild(label);
+            const modes = [
+                ['nonins', 'non inserito', 'Predefinito: restano visibili in lista ma senza spunta, quindi non vengono inseriti. Se ne vuoi uno, spuntalo a mano.'],
+                ['includi', 'includi', 'Li tratta come civici normali, gi\u00e0 spuntati. Usalo se nella tua zona questa forma \u00e8 reale.'],
+                ['escludi', 'escludi', 'Li toglie dalla lista: non li vedi e non li inserisci.']
+            ];
+            const btns = [];
+            modes.forEach(([mode, txt, tip]) => {
+                const a = document.createElement('a');
+                a.href = 'javascript:void(0)'; a.textContent = txt; a.title = tip;
+                a.className = 'wfit-suspmode';
+                a.addEventListener('click', () => {
+                    settings.suspMode = mode; saveSettings();
+                    btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === mode));
+                    applySuspMode();
+                });
+                btns.push({ el: a, mode });
+                bar.appendChild(a);
+            });
+            const applySuspMode = () => {
+                const m = settings.suspMode;
+                for (const x of rows) {
+                    if (!x.p.susp) continue;
+                    x.row.style.display = (m === 'escludi') ? 'none' : '';
+                    x.row.classList.toggle('wfit-hnsusp', m !== 'includi');
+                    x.row.classList.toggle('wfit-hnok', m === 'includi');
+                    x.cb.checked = (m === 'includi');
+                    x.setNote(m === 'includi' ? 'ok' : 'warn',
+                        m === 'includi' ? 'incluso su tua scelta' : '\u26a0\ufe0f non inserito');
+                }
+                updateGo();
+            };
+            btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === settings.suspMode));
+            legend.parentNode.insertBefore(bar, legend.nextSibling);
+            if (settings.suspMode !== 'includi') {
+                legendBits.push('<span class="wfit-swatch wfit-sw-susp"></span> forma 20/1, non inserito');
+                refreshLegend();
+            }
+        }
+        if (shown.some(p => p.dup)) {
+            legendBits.push('<span class="wfit-swatch wfit-sw-dup"></span> stesso numero, pi\u00f9 punti');
+            refreshLegend();
+        }
         card.appendChild(box);
         // annota i civici gia' presenti su Waze e togli loro la spunta
         loadExistingHNs().then(ex => {
@@ -2225,9 +2378,22 @@
                 const near = ex.find(h => h.num === lbl &&
                     Math.abs(h.c[0] - x.p.lon) < 6e-4 && Math.abs(h.c[1] - x.p.lat) < 6e-4 &&
                     haversine(h.c[0], h.c[1], x.p.lon, x.p.lat) < 40);
-                if (near) { x.cb.checked = false; x.dist.textContent += ' \u00b7 gi\u00e0 su Waze'; marked++; }
+                if (near) {
+                    x.cb.checked = false;
+                    x.row.classList.add('wfit-hnwaze');
+                    x.setNote('waze', 'gi\u00e0 su Waze, niente da fare');
+                    x.row.title = `Questo civico esiste gi\u00e0 sulla mappa a ${Math.round(haversine(near.c[0], near.c[1], x.p.lon, x.p.lat))} m da qui: `
+                        + 'per questo arriva senza spunta. Se lo reinserisci, Waze lo rifiuta come duplicato. '
+                        + 'Spuntalo solo se sei sicuro che quello esistente sia messo male e vuoi provare a correggerlo.'
+                        + `\nCoordinate ANNCSU: ${x.p.lat.toFixed(6)}, ${x.p.lon.toFixed(6)}`;
+                    marked++;
+                }
             }
-            if (marked) updateGo();
+            if (marked) {
+                legendBits.push('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
+                refreshLegend();
+                updateGo();
+            }
         }).catch(() => { /* niente annotazioni */ });
     }
 
