@@ -29,8 +29,6 @@ La guida completa è nel pannello dello script ("Come funziona").
 
 - Lo script modifica **solo ciò che differisce**, salta ciò che è già a posto e lavora a piccoli
   lotti: **rivedi sempre l'elenco modifiche prima di salvare**.
-- Verifica l'ammissibilità della fonte con i coordinatori della community italiana prima di
-  usarlo su larga scala.
 
 ## Sviluppo e rilasci
 
