@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.6.b
+// @version      0.0.7.b
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -349,9 +349,11 @@
 #wfit-panel a.wfit-lic:hover { color:#0f4f8f; }
 #wfit-panel .wfit-actions { display:flex; gap:5px; flex-wrap:wrap; margin-top:4px; }
 #wfit-panel .wfit-hnrev { margin-top:7px; border-top:1px dashed #d8d8d8; padding-top:6px; }
-#wfit-panel .wfit-hnrev .wfit-hnlist { max-height:190px; overflow:auto; margin:4px 0; border:1px solid #eee; border-radius:7px; padding:3px 4px; }
+#wfit-panel .wfit-hnrev .wfit-hnlist { max-height:260px; overflow:auto; margin:4px 0; border:1px solid #eee; border-radius:7px; padding:3px 4px; }
 #wfit-panel .wfit-hnrow { display:flex; align-items:center; gap:6px; padding:2px 3px; border-radius:5px; cursor:pointer; }
 #wfit-panel .wfit-hnrow:hover { background:#eef4ff; }
+#wfit-panel .wfit-hndup { background:#fff8e6; border-left:3px solid #e8b530; padding-left:4px; }
+#wfit-panel .wfit-hndup:hover { background:#fdf0d0; }
 #wfit-panel .wfit-hnrow b { min-width:44px; }
 #wfit-panel .wfit-hnnum { width:70px; min-width:56px; padding:2px 5px; border:1px solid #bbb; border-radius:5px; font-weight:650; font-size:12px; }
 #wfit-panel .wfit-hnnum:focus { border-color:var(--blu); outline:none; }
@@ -480,7 +482,7 @@
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Con <b>Civici sulla mappa</b> vedi i punti etichettati (343, 343/A&hellip;). Se togli segmenti dalla lista, risultati e mappa si riallineano da soli.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;) o <b>Dentro</b> (PN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
-    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico; il numero &egrave; modificabile e si normalizza da solo (18b &rarr; 18/B); i civici oltre <b>45 m</b> dalla strada vengono esclusi (Waze li rifiuterebbe); quelli gi&agrave; presenti compaiono come <b>"gi&agrave; su Waze"</b> e si deselezionano da soli; con <b>"+ Aggiungi al centro mappa"</b> inserisci un civico letto su Street View nel punto dove hai centrato la mappa. Confermi con "Inserisci" (lotti da 50) e salvi. Servono una strada <b>con nome</b> e nessuna modifica pendente: se manca qualcosa, lo script te lo dice prima.</p>
+    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico; il numero &egrave; modificabile e si normalizza da solo (18b &rarr; 18/B); i civici oltre <b>45 m</b> dalla strada vengono esclusi (Waze li rifiuterebbe); quelli gi&agrave; presenti compaiono come <b>"gi&agrave; su Waze"</b> e si deselezionano da soli; se lo stesso numero compare in <b>pi&ugrave; punti dell'archivio</b> te li mostra <b>tutti</b>, su sfondo giallo e senza spunta, perch&eacute; solo tu puoi vedere quale posizione &egrave; quella vera: Waze ne accetta comunque uno solo per via; con <b>"+ Aggiungi al centro mappa"</b> inserisci un civico letto su Street View nel punto dove hai centrato la mappa. Confermi con "Inserisci" (tutti quelli spuntati, senza limite di numero) e salvi. Servono una strada <b>con nome</b> e nessuna modifica pendente: se manca qualcosa, lo script te lo dice prima.</p>
     <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
     <p class="wfit-key"><span class="wfit-gnum">7 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
     <div class="wfit-muted">Lo script modifica solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l'elenco modifiche prima di salvare</b>.</div>
@@ -1680,7 +1682,10 @@
         const radius = settings.raggio;
         const dLat = radius / 111320;
         const results = new Map(); // gid -> {dist, count}
-        const pts = [];            // civici agganciati: {i, g, d}
+        // Lo stesso record ANNCSU puo' cadere entro il raggio di PIU' segmenti della lista (una via
+        // spezzata in tronconi, le due carreggiate di un viale, una laterale catturata insieme).
+        // E' sempre lo stesso civico: lo teniamo una volta sola, con la distanza minima trovata.
+        const ptBest = new Map(); // indice record -> {i, g, d}
 
         for (const coords of segs) {
             let minLon = 999, minLat = 999, maxLon = -999, maxLat = -999;
@@ -1705,9 +1710,12 @@
                 r.uniq.add((cv || ce) ? cv * 1024 + ce : -(i + 1));
                 r.count = r.uniq.size;
                 if (d < r.dist) r.dist = d;
-                pts.push({ i, g, d });
+                const prev = ptBest.get(i);
+                if (!prev) ptBest.set(i, { i, g, d });
+                else if (d < prev.d) prev.d = d;
             }
         }
+        const pts = [...ptBest.values()]; // civici agganciati, uno per record: {i, g, d}
 
         lastResults = [...results.entries()]
             .map(([g, r]) => {
@@ -1718,30 +1726,49 @@
             .slice(0, 8);
         lastResults.forEach((r, idx) => { r.color = PALETTE[idx % PALETTE.length]; });
 
-        // civici agganciati per odonimo, DEDUPLICATI: lo stesso numero civico puo' arrivare piu'
-        // volte (piu' accessi ANNCSU sullo stesso numero, oppure lo stesso punto agganciato da due
-        // segmenti diversi della lista). Waze rifiuterebbe i doppioni, quindi ne teniamo uno solo:
-        // quello piu' vicino alla strada. Gli accessi senza numero restano distinti per posizione.
+        // civici agganciati per odonimo. NON si butta via niente di numerato: lo stesso numero puo'
+        // esistere su PIU' record ANNCSU distinti (piu' accessi allo stesso civico: portone, passo
+        // carrabile, ingresso secondario) e solo chi edita, guardando il territorio, sa quale
+        // posizione e' quella giusta. Attenzione: qui i record sono gia' unici (vedi ptBest), quindi
+        // una ripetizione e' una ripetizione vera dell'archivio, non lo stesso punto contato due volte. Le ripetizioni le marchiamo (dup) e le mostriamo:
+        // in elenco arrivano spuntate solo le prime occorrenze, le altre restano visibili da valutare.
+        // Unica eccezione: gli accessi SENZA numero identici allo stesso punto, che non aggiungono
+        // nulla da valutare (stesso puntino sulla mappa, nessun numero da confrontare).
         lastPtsByG = new Map();
-        pts.sort((a, b) => a.d - b.d); // ordine per distanza: il primo che passa e' il piu' vicino
-        const seenHN = new Set();
+        pts.sort((a, b) => a.d - b.d); // ordine per distanza: la prima occorrenza e' la piu' vicina
+        const seenHN = new Map();      // chiave -> {n, lon, lat} della prima occorrenza
+        const dupLog = [];
         lastDupCount = 0;
         for (const p of pts) {
             const cv = mem.civn[p.i] || 0, ce = mem.cive[p.i] || 0;
             const label = (cv ? String(cv) : '') + (ce ? '/' + mem.esps[ce] : '');
             const lon = mem.lons[p.i], lat = mem.lats[p.i];
-            // numerati: chiave odonimo + numero/esponente (il punto NON entra nella chiave, altrimenti
-            // due rilievi dello stesso civico a 2 m di distanza passerebbero entrambi)
+            // numerati: chiave odonimo + numero/esponente (il punto NON entra nella chiave: cosi'
+            // due rilievi dello stesso civico a pochi metri risultano ripetizioni dello stesso numero)
             const key = label
                 ? p.g + '|#' + label
                 : p.g + '|@' + Math.round(lon * 1e5) + '|' + Math.round(lat * 1e5);
-            if (seenHN.has(key)) { if (label) lastDupCount++; continue; }
-            seenHN.add(key);
+            const first = seenHN.get(key);
+            const rep = first ? first.n : 0;
+            if (!first) seenHN.set(key, { n: 1, lon, lat });
+            else first.n++;
+            if (!label && rep) continue; // accesso senza numero gia' visto in quel punto esatto
+            // quanto dista dalla prima occorrenza? e' il dato che dice se e' rumore d'archivio
+            // (pochi metri, stesso portone rilevato due volte) o un secondo accesso vero
+            const twinD = first ? haversine(first.lon, first.lat, lon, lat) : 0;
+            if (rep) {
+                lastDupCount++;
+                dupLog.push(`${label}: punto ${rep + 1} a ${Math.round(twinD)} m dal punto 1 ` +
+                    `(${lat.toFixed(6)}, ${lon.toFixed(6)}) \u2014 odonimo "${(mem.groups[p.g] || [])[0] || '?'}"`);
+            }
             let a = lastPtsByG.get(p.g);
             if (!a) { a = []; lastPtsByG.set(p.g, a); }
-            if (a.length < 300) a.push({ lon, lat, label, d: p.d });
+            a.push({ lon, lat, label, d: p.d, dup: rep > 0, rep: rep + 1, twinD });
         }
-        if (lastDupCount) log(`doppioni civici scartati nel match: ${lastDupCount}`);
+        if (lastDupCount) {
+            log(`numeri civici ripetuti nel match (mostrati comunque): ${lastDupCount}`);
+            log('dettaglio ripetizioni (numero, distanza dal gemello, coordinate):\n' + dupLog.join('\n'));
+        }
 
         if (!lastResults.length) {
             ui.results.innerHTML = `Nessun civico ANNCSU entro ${radius} m. Aumenta il raggio, oppure il Comune non ha ancora caricato le coordinate nell'archivio.`;
@@ -1754,8 +1781,8 @@
     }
 
     // Disegna sulla mappa i civici agganciati, colorati come i risultati, con etichetta = numero/esponente.
-    // Usa la stessa lista gia' deduplicata di lastPtsByG: cosi' i puntini sulla mappa e le righe
-    // dell'elenco di controllo mostrano sempre gli stessi civici, senza doppioni.
+    // Usa la stessa lista di lastPtsByG, ripetizioni comprese: cosi' i puntini sulla mappa e le righe
+    // dell'elenco di controllo mostrano sempre esattamente le stesse cose.
     function drawCivici() {
         const colorOf = new Map(lastResults.map(r => [r.g, r.color]));
         const features = [];
@@ -1770,9 +1797,9 @@
                     geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
                     properties: { color, label: p.label }
                 });
-                if (features.length >= 500) break;
+                if (features.length >= 1500) break;
             }
-            if (features.length >= 500) break;
+            if (features.length >= 1500) break;
         }
         lastDotFeatures = features;
         refreshMapLayer();
@@ -1838,8 +1865,8 @@
             const note = document.createElement('div');
             note.className = 'wfit-muted';
             note.style.marginBottom = '5px';
-            note.title = 'Stesso odonimo e stesso numero civico presenti piu\' volte nei dati ANNCSU o agganciati da piu\' segmenti: tenuto il punto piu\' vicino alla strada.';
-            note.innerHTML = `&#9888;&#65039; ${lastDupCount} doppion${lastDupCount === 1 ? 'e' : 'i'} di civici rimoss${lastDupCount === 1 ? 'o' : 'i'} dal confronto.`;
+            note.title = 'Stesso odonimo e stesso numero civico presenti piu\' volte nei dati ANNCSU (piu\' accessi allo stesso civico) o agganciati da piu\' segmenti. Sono mostrati tutti: nell\'elenco dei civici le ripetizioni sono marcate e arrivano senza spunta, decidi tu quale posizione e\' quella giusta.';
+            note.innerHTML = `&#8505;&#65039; ${lastDupCount} ${lastDupCount === 1 ? 'numero civico ripetuto' : 'numeri civici ripetuti'} nell'archivio: mostrat${lastDupCount === 1 ? 'o' : 'i'} comunque, da valutare.`;
             ui.results.appendChild(note);
         }
         for (const r of results) {
@@ -2072,7 +2099,9 @@
             const ka = hnKey(a.label), kb = hnKey(b.label);
             return (ka[0] - kb[0]) || ka[1].localeCompare(kb[1]);
         });
-        const shown = cand.list.slice(0, 50);
+        // Nessun tetto: si mostrano TUTTI i civici validi trovati, altrimenti i numeri
+        // oltre il cinquantesimo sparivano dal giro di controllo
+        const shown = cand.list;
 
 
         const box = document.createElement('div');
@@ -2080,7 +2109,7 @@
         const head = document.createElement('div');
         head.className = 'wfit-muted';
         head.innerHTML = `<b>Controlla e conferma</b> \u00b7 ${shown.length} civic${shown.length === 1 ? 'o' : 'i'} pront${shown.length === 1 ? 'o' : 'i'}` +
-            (cand.list.length > 50 ? ' (primi 50 in ordine di numero: il resto al giro dopo)' : '') +
+            ' \u00b7 tutti in ordine di numero' +
             (cand.tooFar ? ` \u00b7 ${cand.tooFar} oltre ${HN_MAX_D} m esclusi` : '') +
             ` \u00b7 numero modificabile \u00b7 <a href="javascript:void(0)" data-a="all">tutti</a> / <a href="javascript:void(0)" data-a="none">nessuno</a>`;
         box.appendChild(head);
@@ -2096,15 +2125,22 @@
         };
         const addRowEl = p => {
             const row = document.createElement('div');
-            row.className = 'wfit-hnrow';
-            row.title = 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).';
+            row.className = 'wfit-hnrow' + (p.dup ? ' wfit-hndup' : '');
+            row.title = (p.dup
+                ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
+                : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).')
+                + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
             const cb = document.createElement('input');
-            cb.type = 'checkbox'; cb.checked = true;
+            // le ripetizioni arrivano senza spunta: sono da guardare, non da inserire alla cieca
+            cb.type = 'checkbox'; cb.checked = !p.dup;
             const inp = document.createElement('input');
             inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.label;
             inp.addEventListener('input', () => inp.classList.remove('wfit-bad-in'));
             const dist = document.createElement('span'); dist.className = 'wfit-muted';
-            dist.textContent = p.manual ? 'aggiunto da te' : `~${Math.round(p.d)} m`;
+            dist.textContent = p.manual
+                ? 'aggiunto da te'
+                : `~${Math.round(p.d)} m` +
+                  (p.dup ? ` \u00b7 stesso numero, punto ${p.rep} \u00b7 a ${Math.round(p.twinD || 0)} m dal punto 1` : '');
             row.appendChild(cb); row.appendChild(inp); row.appendChild(dist);
             row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp) quickCenter(p.lon, p.lat); });
             cb.addEventListener('change', updateGo);
@@ -2163,6 +2199,14 @@
             }
             if (bad) { toast('Controlla i numeri evidenziati in rosso (formati validi: 18, 18/B, 12/BIS).', 7000); return; }
             if (!sel.length) return;
+            // Waze tiene un solo punto per numero sulla stessa via: se ne hai spuntati due uguali
+            // te lo diciamo, ma la scelta resta tua (il secondo verra' rifiutato al salvataggio)
+            const cnt = new Map();
+            for (const x of sel) cnt.set(x.label, (cnt.get(x.label) || 0) + 1);
+            const rip = [...cnt.entries()].filter(([, n]) => n > 1).map(([v]) => v);
+            if (rip.length) {
+                toast(`Hai selezionato lo stesso numero in piu' punti (${rip.slice(0, 6).join(', ')}${rip.length > 6 ? '\u2026' : ''}): Waze ne accetta uno solo per via, gli altri verranno rifiutati al salvataggio. Se sai qual e' quello giusto, togli la spunta agli altri.`, 11000);
+            }
             box.remove();
             runHnInsert(r, sel);
         });
@@ -2244,9 +2288,9 @@
                     reasons[niceReason(m)] = (reasons[niceReason(m)] || 0) + 1;
                 }
             };
-            for (const p of list.slice(0, 50)) {
+            for (const p of list) {
                 k++;
-                if (k % 5 === 0) { status(`Inserisco civici: ${k}/${Math.min(list.length, 50)}\u2026`); await tick(); }
+                if (k % 5 === 0) { status(`Inserisco civici: ${k}/${list.length}\u2026`); await tick(); }
                 await tryPoint(p);
             }
 
