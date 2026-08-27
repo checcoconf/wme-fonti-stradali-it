@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.8.b
+// @version      0.0.9.b
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -245,8 +245,8 @@
             if (regs.length) {
                 rebuildMemory(regs);
                 let s = `Cache pronta: ${fmtN(mem.n)} civici (${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsFreshnessLabel(regs)}`;
-                if (regs.some(r => !r.pv || r.pv < 8)) {
-                    s += ` <span style="color:#c60"><b>Cache di una versione precedente: mancano le lettere dei civici (es. 343/A). Premi "Scarica regione" per rigenerarla.</b></span>`;
+                if (regs.some(r => !r.pv || r.pv < 9)) {
+                    s += ` <span style="color:#c60"><b>Cache di una versione precedente: gli esponenti dei civici possono mancare o essere incompleti (es. 343/A, 20/1). Premi "Scarica regione" per rigenerarla.</b></span>`;
                 }
                 // Il conteggio giorni sopra e' sempre visibile; qui solo la spiegazione, e solo
                 // quando almeno una regione ha superato la soglia (MAI uno scarico automatico).
@@ -821,7 +821,7 @@
 
     async function parseIndirToRecord(u8, reg, nomeReg, onProgress) {
         const lons = growBuf(Float32Array), lats = growBuf(Float32Array),
-            gids = growBuf(Uint32Array), civn = growBuf(Uint16Array), cive = growBuf(Uint8Array);
+            gids = growBuf(Uint32Array), civn = growBuf(Uint16Array), cive = growBuf(Uint16Array);
         const groups = [];
         const gmap = new Map();
         const esps = [''];               // dizionario esponenti: indice 0 = nessuno
@@ -832,7 +832,9 @@
             if (!s) return 0;
             let i = emap.get(s);
             if (i === undefined) {
-                if (esps.length >= 255) return 0; // limite Uint8: improbabile, ma sicuro
+                // con gli esponenti numerici (20/1 … 20/240) una regione supera facilmente i 255
+                // valori distinti: oltre il tetto l'esponente si perdeva e il civico diventava nudo
+                if (esps.length >= 65535) return 0;
                 i = esps.length; esps.push(s); emap.set(s, i);
             }
             return i;
@@ -883,7 +885,7 @@
         else await plainCsvLines(u8, handleLine, p => onProgress && onProgress(p, read, lons.total));
 
         return {
-            reg, nomeReg, quando: Date.now(), count: lons.total, read, diag, pv: 8,
+            reg, nomeReg, quando: Date.now(), count: lons.total, read, diag, pv: 9,
             lons: lons.done().buffer,
             lats: lats.done().buffer,
             gids: gids.done().buffer,
@@ -1062,11 +1064,13 @@
             const v = (f[i] || '').trim();
             if (v && /^\d{1,5}[A-Z]?(\/[A-Z0-9]+)?$/i.test(v)) { civ = i; break; }
         }
-        // Esponente (es. "A", "N", "BIS"): campo di sole lettere subito dopo il civico
+        // Esponente: campo corto subito dopo il civico. Sono validi sia alfabetici ("A", "BIS")
+        // sia NUMERICI ("20/1", "20/2"): se qui accettassimo le sole lettere, 20/1 e 20/2
+        // perderebbero l'esponente, diventerebbero due "20" e finirebbero marcati come ripetizioni.
         let esp = -1;
         if (civ >= 0 && civ + 1 < lon) {
             const v = (f[civ + 1] || '').trim();
-            if (v === '' || /^[A-Za-z]{1,4}$/.test(v)) esp = civ + 1;
+            if (v === '' || /^[A-Za-z0-9]{1,4}$/.test(v)) esp = civ + 1;
         }
         return { bel, den, loc, civ, esp, lon, lat };
     }
@@ -1101,7 +1105,7 @@
                     if (i === undefined) { i = esps.length; esps.push(s); emap.set(s, i); }
                     return i;
                 });
-                const rc = new Uint8Array(r.cive);
+                const rc = new Uint16Array(r.cive);
                 for (let i = 0; i < rc.length; i++) cive[base + i] = emapLocal[rc[i]] || 0;
             }
             const rg = new Uint32Array(r.gids);
