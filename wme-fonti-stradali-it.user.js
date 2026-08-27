@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.5.b
+// @version      0.0.6.b
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -33,12 +33,26 @@
     const SCRIPT_ID = 'wme-fonti-it';
     const SCRIPT_NAME = 'WME Fonti Stradali IT';
     const AUTORE = 'checcoconf';
+    // Contatto Slack dell'autore (workspace della community italiana Waze)
+    const SLACK_NICK = 'checcoconf';
+    const SLACK_ID = 'U0BHX22AFHS';
+    // app_redirect apre direttamente il messaggio diretto con l'autore: nell'app desktop se installata,
+    // altrimenti nel browser dopo il login al workspace
+    const SLACK_URL = `https://slack.com/app_redirect?channel=${SLACK_ID}`;
+    const slackLink = (txt) => `<a class="wfit-slack" href="${SLACK_URL}" target="_blank" rel="noopener noreferrer" title="Apre il messaggio diretto con @${SLACK_NICK} su Slack (community Waze Italia)">${txt || ('@' + SLACK_NICK)}</a>`;
     const VERSION = (typeof GM_info !== 'undefined' && GM_info.script) ? GM_info.script.version : 'dev';
     const STORE_KEY = 'wmeFontiIT_v3';
     const GRID_CELL = 0.004; // ~440 m in latitudine
     const STALE_DAYS = 35; // ANNCSU aggiorna i dataset regionali con cadenza mensile: oltre questa soglia, avviso (mai scarico automatico)
     const ANNCSU_DL = 'https://anncsu.open.agenziaentrate.gov.it/age-inspire/opendata/anncsu/getds.php?INDIR_';
     const ISTAT_COMUNI = 'https://www.istat.it/storage/codici-unita-amministrative/Elenco-comuni-italiani.csv';
+    // Licenza degli open data ANNCSU (Istat / Agenzia delle Entrate)
+    const LIC_NOME = 'CC-BY 4.0';
+    const LIC_URL = 'https://creativecommons.org/licenses/by/4.0/deed.it';
+    const licLink = (txt) => `<a class="wfit-lic" href="${LIC_URL}" target="_blank" rel="noopener noreferrer" title="Creative Commons Attribuzione 4.0 Internazionale &ndash; testo della licenza">${txt || LIC_NOME}</a>`;
+    // Sito ufficiale dell'Archivio Nazionale dei Numeri Civici e delle Strade Urbane
+    const ANNCSU_URL = 'https://www.anncsu.gov.it/it/';
+    const anncsuLink = (txt) => `<a class="wfit-lic" href="${ANNCSU_URL}" target="_blank" rel="noopener noreferrer" title="ANNCSU &ndash; Archivio Nazionale dei Numeri Civici e delle Strade Urbane, sito ufficiale">${txt || 'ANNCSU'}</a>`;
 
     const REGIONI = [
         ['ABRU', 'Abruzzo'], ['BASI', 'Basilicata'], ['CALA', 'Calabria'], ['CAMP', 'Campania'],
@@ -68,16 +82,28 @@
     let lastResults = [];
     let lastPtsByG = new Map();       // gid -> [{lon,lat,label,d}] civici agganciati (deduplicati)
     let lastDotFeatures = [];         // ultime feature disegnate (per riaccendere la spunta al volo)
+    let lastDupCount = 0;             // doppioni civici scartati nell'ultimo confronto
     let analyzeTimer = null;
     let busy = false;
+    let batchRunning = false;         // ciclo su piu' regioni in corso
+    let abortBatch = false;           // richiesta di fermarsi dopo la regione in corso
 
     const settings = Object.assign(
-        { raggio: 150, titleCase: true, captureMode: 'alt', applyMode: 'extra', autoAnalyze: true, showDots: true, hlColor: '#00e5ff', nameRules: [] },
+        { raggio: 150, titleCase: true, captureMode: 'alt', applyMode: 'extra', autoAnalyze: true, showDots: true, hlColor: '#00e5ff', nameRules: [], captureKey: null },
         (() => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) { return {}; } })()
     );
     if (!Array.isArray(settings.nameRules)) settings.nameRules = [];
     if (!/^#[0-9a-f]{6}$/i.test(settings.hlColor || '')) settings.hlColor = '#00e5ff';
     if (!settings.captureMode) settings.captureMode = (settings.capture === false) ? 'off' : 'alt'; // migrazione dalla vecchia spunta
+    // MAIUSC e CTRL da soli sono stati tolti: il WME li usa per la multi-selezione dei segmenti.
+    // Chi li aveva scelti passa alla combinazione equivalente ma libera.
+    if (settings.captureMode === 'shift') settings.captureMode = 'altshift';
+    if (settings.captureMode === 'ctrl') settings.captureMode = 'ctrlalt';
+    // Tasto personalizzato: se il salvataggio e' rovinato o mancante si torna ad ALT (default di sempre)
+    if (settings.captureKey && typeof settings.captureKey !== 'object') settings.captureKey = null;
+    // porta al formato "combinazione" anche i tasti salvati dalla versione precedente (un tasto solo)
+    settings.captureKey = normKeyChoice(settings.captureKey);
+    if (settings.captureMode === 'custom' && !settings.captureKey) settings.captureMode = 'alt';
     if (!settings.applyMode) settings.applyMode = 'extra';
     const saveSettings = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* ignora */ } };
     const log = (...a) => console.log(`${SCRIPT_NAME}:`, ...a);
@@ -173,10 +199,12 @@
     // Scorciatoia (se l'SDK la supporta) per passare al volo tra ALT+clic / Sempre / Spenta
     function registerShortcut() {
         const cycle = () => {
-            settings.captureMode = settings.captureMode === 'alt' ? 'always' : settings.captureMode === 'always' ? 'off' : 'alt';
+            // con un tasto personalizzato registrato entra anche lui nel giro
+            const ring = settings.captureKey ? ['alt', 'altshift', 'custom', 'always', 'off'] : ['alt', 'altshift', 'always', 'off'];
+            const i = ring.indexOf(settings.captureMode);
+            settings.captureMode = ring[(i + 1) % ring.length];
             saveSettings();
-            if (ui.capmode) ui.capmode.value = settings.captureMode;
-            updateCapturedUI();
+            syncCapUI();
             toast(capModeLabel());
         };
         const tries = [
@@ -194,6 +222,21 @@
                 log(`comuni incorporati: ${belNome.size}`);
             }
         } catch (e) { log('pack comuni KO', e); }
+    }
+
+    // Accende il bottone "Aggiorna" quando almeno una regione in locale ha passato STALE_DAYS:
+    // e' solo un promemoria visivo, lo scarico resta sempre una scelta dell'editor.
+    function markUpdateDue(regs) {
+        if (!ui.aggiorna) return;
+        const vecchie = (regs || []).filter(r => r.quando && (Date.now() - r.quando) / 86400000 > STALE_DAYS);
+        const due = vecchie.length > 0;
+        ui.aggiorna.classList.toggle('wfit-due', due);
+        if (due) {
+            const g = Math.max(...vecchie.map(r => Math.floor((Date.now() - r.quando) / 86400000)));
+            ui.aggiorna.title = `Sono passati ${g} giorni dallo scarico di ${vecchie.map(r => r.nomeReg || r.reg).join(', ')}: ANNCSU aggiorna i dataset ogni mese, conviene riscaricare.`;
+        } else {
+            ui.aggiorna.title = "Riscarica le regioni che hai gia' in locale, per prendere i dataset ANNCSU piu' recenti";
+        }
     }
 
     async function loadCache() {
@@ -214,6 +257,7 @@
             } else {
                 status('Nessun dato: scegli la regione e premi Scarica.');
             }
+            markUpdateDue(regs);
         } catch (e) { log('cache KO', e); }
     }
 
@@ -248,6 +292,11 @@
   text-transform:uppercase; letter-spacing:.6px; color:#333; border-bottom:2px solid;
   border-image:linear-gradient(90deg,var(--wg) 33%,#c9c9c9 33% 66%,var(--wr) 66%) 1; padding-bottom:3px; }
 #wfit-panel .wfit-row { display:flex; gap:6px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+#wfit-panel .wfit-row.wfit-nowrap { flex-wrap:nowrap; }
+#wfit-panel .wfit-btn.wfit-due { background:#e8f7ec; border-color:#2e9e52; color:#1d6b37; font-weight:700; }
+#wfit-panel .wfit-btn.wfit-due::before { content:'\\2022 '; color:#2e9e52; font-size:14px; line-height:0; }
+#wfit-panel .wfit-btn.wfit-due:hover { background:#d7f0de; }
+#wfit-panel .wfit-row.wfit-nowrap .wfit-btn { flex:1 1 0; min-width:0; padding-left:6px; padding-right:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #wfit-panel input[type=number], #wfit-panel input[type=text], #wfit-panel select { flex:1; min-width:60px; padding:6px 8px; border:1px solid #ccc;
   border-radius:7px; font-size:12px; background:#fff; transition:border-color .15s; }
 #wfit-panel input:focus, #wfit-panel select:focus { border-color:var(--blu); outline:none; }
@@ -291,6 +340,13 @@
 #wfit-panel .wfit-guide .wfit-gnum { color:var(--wr); font-weight:800; }
 #wfit-panel .wfit-guide .wfit-key { background:#fff8e6; border:1px solid #eedfb2; border-radius:8px; padding:8px 9px; }
 #wfit-panel .wfit-foot { margin-top:10px; padding-top:6px; border-top:1px dashed #d8d8d8; color:#767c85; font-size:10.5px; }
+#wfit-panel .wfit-keybadge { display:inline-block; min-width:52px; text-align:center; padding:2px 7px; border:1px solid #cfd4db; border-bottom-width:2px; border-radius:5px; background:#f6f7f9; font-family:monospace; font-size:11px; font-weight:700; color:#2b3138; }
+#wfit-panel .wfit-keybadge.wfit-rec { border-color:#d33; color:#d33; background:#fff2f2; cursor:pointer; min-width:0; font-family:inherit; font-weight:600; }
+#wfit-panel .wfit-keybadge.wfit-pend { border-color:#c98a00; color:#8a5f00; background:#fff9e8; }
+#wfit-panel a.wfit-lic { color:#1a73c7; text-decoration:underline; font-weight:600; }
+#wfit-panel a.wfit-slack { color:#611f69; text-decoration:underline; font-weight:700; }
+#wfit-panel a.wfit-slack:hover { color:#3d1442; }
+#wfit-panel a.wfit-lic:hover { color:#0f4f8f; }
 #wfit-panel .wfit-actions { display:flex; gap:5px; flex-wrap:wrap; margin-top:4px; }
 #wfit-panel .wfit-hnrev { margin-top:7px; border-top:1px dashed #d8d8d8; padding-top:6px; }
 #wfit-panel .wfit-hnrev .wfit-hnlist { max-height:190px; overflow:auto; margin:4px 0; border:1px solid #eee; border-radius:7px; padding:3px 4px; }
@@ -324,6 +380,8 @@
   #wfit-panel .wfit-chip { font-size:11.5px; padding:4px 8px 4px 11px; }
   #wfit-panel .wfit-x { padding:0 4px; }
   #wfit-panel input[type=checkbox], #wfit-panel input[type=radio] { transform:scale(1.25); margin-right:4px; }
+  /* la riga dei tre bottoni dati resta comunque su una riga sola, solo piu' compatta */
+  #wfit-panel .wfit-row.wfit-nowrap button.wfit-btn { padding:8px 4px; font-size:12px; }
 }
 `;
 
@@ -350,7 +408,11 @@
   <progress id="wfit-prog" max="100" value="0" style="display:none"></progress>
   <div class="wfit-muted" id="wfit-datastatus">Avvio&hellip;</div>
   <details><summary class="wfit-muted">Altre opzioni dati</summary>
-    <div class="wfit-row"><button class="wfit-btn" id="wfit-svuota-cache">Svuota tutti i dati salvati</button></div>
+    <div class="wfit-row wfit-nowrap">
+      <button class="wfit-btn" id="wfit-scarica-tutte" title="Scarica una dopo l'altra tutte e 20 le regioni: ci vogliono alcuni minuti e parecchia memoria">Scarica tutte</button>
+      <button class="wfit-btn" id="wfit-aggiorna" title="Riscarica le regioni che hai gia' in locale, per prendere i dataset ANNCSU piu' recenti">Aggiorna</button>
+      <button class="wfit-btn" id="wfit-svuota-cache" title="Cancella tutte le regioni salvate in locale">Svuota dati</button>
+    </div>
   </details>
   </div>
 
@@ -359,12 +421,21 @@
   <div class="wfit-row">
     <label>Cattura</label>
     <select id="wfit-capmode">
-      <option value="alt">&#8997; ALT + clic (consigliata)</option>
-      <option value="shift">&#8679; MAIUSC + clic</option>
-      <option value="ctrl">&#8963;/&#8984; CTRL + clic (il WME lo usa per la multi-selezione)</option>
+      <option value="alt">&#8997; ALT + clic</option>
+      <option value="altshift">&#8997;&#8679; ALT + MAIUSC + clic</option>
+      <option value="ctrlalt">&#8963;/&#8984;&#8997; CTRL + ALT + clic</option>
+      <option value="custom">&#9000; Un tasto a tua scelta + clic</option>
       <option value="always">Sempre (ogni clic finisce in lista)</option>
       <option value="off">Spenta (usa "Aggiungi selezione")</option>
     </select>
+  </div>
+  <div class="wfit-row" id="wfit-keyrow" title="Un solo tasto della tastiera, quello che tieni premuto mentre clicchi un segmento. Si registra una volta, resta salvato e vale per sempre. ALT, MAIUSC e CTRL non si scelgono qui: per quelli ci sono le voci fisse del menu Cattura.">
+    <label>Tasto (uno solo)</label>
+    <span class="wfit-keybadge" id="wfit-keyshow">nessuno</span>
+    <button class="wfit-btn" id="wfit-keyset">Cambia</button>
+    <button class="wfit-btn wfit-primary" id="wfit-keyok" title="Salva questo tasto">Conferma</button>
+    <button class="wfit-btn" id="wfit-keyredo" title="Scegline un altro">Rifai</button>
+    <button class="wfit-btn" id="wfit-keyclr" title="Torna ad ALT + clic">Azzera</button>
   </div>
   <div class="wfit-box" id="wfit-selinfo">Lista vuota.</div>
   <div class="wfit-row">
@@ -374,7 +445,7 @@
   <div class="wfit-row">
     <label>Evidenzia</label>
     <select id="wfit-hlcolor">
-      <option value="#00e5ff">Ciano elettrico (consigliato)</option>
+      <option value="#00e5ff">Ciano elettrico</option>
       <option value="#ff2bd6">Fucsia</option>
       <option value="#ffe600">Giallo fluo</option>
       <option value="#a6ff00">Verde lime</option>
@@ -404,28 +475,37 @@
   </div>
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
-    <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia solo una parte &egrave; ancora geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). "Svuota tutti i dati salvati" riparte da zero.</p>
-    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell'editor. Dal menu <b>Cattura</b> puoi usare un altro tasto (MAIUSC, CTRL/&#8984; &mdash; attenzione: il WME lo usa per la multi-selezione), la modalit&agrave; "Sempre" o spegnerla e usare "Aggiungi selezione attuale". I chip rossi indicano i segmenti dove l'ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia solo una parte &egrave; ancora geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). Sotto <b>Altre opzioni dati</b>, <b>Scarica tutte</b> le prende una dopo l'altra (alcuni minuti: te lo chiede prima di partire), mentre <b>Aggiorna</b> riscarica quelle che hai gi&agrave; in locale (e si accende di verde quando i tuoi dati hanno passato i 35 giorni); in tutti e due i casi il bottone diventa <b>Ferma</b> e il ciclo si interrompe dopo la regione in corso. <b>Svuota dati</b> riparte da zero. I dati ANNCSU sono <b>open data</b> rilasciati con licenza ${licLink('Creative Commons Attribuzione 4.0 (CC-BY 4.0)')}: si possono riutilizzare anche su Waze, purch&eacute; sia citata la fonte.</p>
+    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell'editor. Dal menu <b>Cattura</b> puoi passare a <b>ALT + MAIUSC</b> o <b>CTRL/&#8984; + ALT</b> (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione), alla modalit&agrave; "Sempre" o spegnerla e usare "Aggiungi selezione attuale". I chip rossi indicano i segmenti dove l'ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Con <b>Civici sulla mappa</b> vedi i punti etichettati (343, 343/A&hellip;). Se togli segmenti dalla lista, risultati e mappa si riallineano da soli.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;) o <b>Dentro</b> (PN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
     <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico; il numero &egrave; modificabile e si normalizza da solo (18b &rarr; 18/B); i civici oltre <b>45 m</b> dalla strada vengono esclusi (Waze li rifiuterebbe); quelli gi&agrave; presenti compaiono come <b>"gi&agrave; su Waze"</b> e si deselezionano da soli; con <b>"+ Aggiungi al centro mappa"</b> inserisci un civico letto su Street View nel punto dove hai centrato la mappa. Confermi con "Inserisci" (lotti da 50) e salvi. Servono una strada <b>con nome</b> e nessuna modifica pendente: se manca qualcosa, lo script te lo dice prima.</p>
     <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
     <p class="wfit-key"><span class="wfit-gnum">7 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
     <div class="wfit-muted">Lo script modifica solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l'elenco modifiche prima di salvare</b>.</div>
-    <p>&#128172; Info, idee o problemi? Scrivimi su <b>Slack</b>: <b>checcoconf</b>.</p>
+    <p>&#128172; Info, idee o problemi? Scrivimi su <b>Slack</b>: ${slackLink()}.</p>
   </details>
 
-  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; a cura di <b>${AUTORE}</b> &middot; dati: ANNCSU (Istat / Agenzia delle Entrate), open data &middot; info: Slack <b>checcoconf</b>.</div>
+  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; a cura di <b>${AUTORE}</b> &middot; dati: ${anncsuLink()} (Istat / Agenzia delle Entrate), open data con licenza ${licLink()} &middot; info: Slack ${slackLink()}.</div>
   <div class="wfit-toast" id="wfit-toast"></div>`;
         tabPane.appendChild(p);
 
         ui = {
             regione: p.querySelector('#wfit-regione'),
             scarica: p.querySelector('#wfit-scarica'),
+            scaricaTutte: p.querySelector('#wfit-scarica-tutte'),
+            aggiorna: p.querySelector('#wfit-aggiorna'),
             prog: p.querySelector('#wfit-prog'),
             datastatus: p.querySelector('#wfit-datastatus'),
             svuotaCache: p.querySelector('#wfit-svuota-cache'),
             capmode: p.querySelector('#wfit-capmode'),
+            keyrow: p.querySelector('#wfit-keyrow'),
+            keyshow: p.querySelector('#wfit-keyshow'),
+            keyset: p.querySelector('#wfit-keyset'),
+            keyok: p.querySelector('#wfit-keyok'),
+            keyredo: p.querySelector('#wfit-keyredo'),
+            keyclr: p.querySelector('#wfit-keyclr'),
             hlcolor: p.querySelector('#wfit-hlcolor'),
             selinfo: p.querySelector('#wfit-selinfo'),
             addSel: p.querySelector('#wfit-add-sel'),
@@ -454,7 +534,29 @@
         ui.regione.addEventListener('change', () => { settings.reg = ui.regione.value; saveSettings(); });
         ui.raggio.addEventListener('change', () => { settings.raggio = Math.min(2000, Math.max(1, parseInt(ui.raggio.value, 10) || 150)); saveSettings(); });
         ui.titlecase.addEventListener('change', () => { settings.titleCase = ui.titlecase.checked; saveSettings(); renderResults(lastResults); });
-        ui.capmode.addEventListener('change', () => { settings.captureMode = ui.capmode.value; saveSettings(); toast(capModeLabel()); });
+        ui.capmode.addEventListener('change', () => {
+            const v = ui.capmode.value;
+            if (v === 'custom') {
+                // scelta "personalizzata": ci si mette subito in ascolto, senza far premere altri bottoni
+                settings.captureMode = 'custom'; saveSettings(); updateKeyRow();
+                startKeyRecording();
+                return;
+            }
+            cancelKeyRecording();
+            settings.captureMode = v; saveSettings(); updateKeyRow(); updateCapturedUI(); toast(capModeLabel());
+        });
+        ui.keyshow.addEventListener('click', armKeyListening);
+        ui.keyset.addEventListener('click', () => { if (recordingKey) cancelKeyRecording('Ascolto interrotto.'); else startKeyRecording(); });
+        ui.keyok.addEventListener('click', confirmKeyCombo);
+        ui.keyredo.addEventListener('click', startKeyRecording);
+        ui.keyclr.addEventListener('click', () => {
+            pendingKey = null;
+            settings.captureKey = null;
+            if (settings.captureMode === 'custom') settings.captureMode = 'alt';
+            saveSettings(); syncCapUI();
+            toast('Tasto personalizzato azzerato: si torna ad ALT + clic.');
+        });
+        updateKeyRow();
         ui.hlcolor.addEventListener('change', () => { settings.hlColor = ui.hlcolor.value; saveSettings(); refreshMapLayer(); });
         ui.autoan.addEventListener('change', () => { settings.autoAnalyze = ui.autoan.checked; saveSettings(); });
         ui.dots.addEventListener('change', () => {
@@ -466,9 +568,12 @@
         ui.amExtra.addEventListener('change', () => { if (ui.amExtra.checked) { settings.applyMode = 'extra'; saveSettings(); } });
         ui.amUrb.addEventListener('change', () => { if (ui.amUrb.checked) { settings.applyMode = 'urb'; saveSettings(); } });
         ui.scarica.addEventListener('click', () => downloadRegion(ui.regione.value).catch(e => { toast('Errore: ' + e.message, 8000); endBusy(); }));
+        ui.scaricaTutte.addEventListener('click', () => downloadAllRegions().catch(e => { toast('Errore: ' + e.message, 8000); endBusy(); }));
+        ui.aggiorna.addEventListener('click', () => refreshDownloadedRegions().catch(e => { toast('Errore: ' + e.message, 8000); endBusy(); }));
         ui.svuotaCache.addEventListener('click', async () => {
             await idb.clear('regioni');
             rebuildMemory([]);
+            markUpdateDue([]);
             status('Dati locali eliminati.');
         });
         ui.addSel.addEventListener('click', () => captureIds(getSelectedSegmentIds(), false));
@@ -490,8 +595,16 @@
         ui.prog.style.display = 'block';
         ui.prog.value = Math.max(0, Math.min(100, Math.round(pct)));
     }
-    function beginBusy() { busy = true; if (ui.scarica) ui.scarica.disabled = true; }
-    function endBusy() { busy = false; if (ui.scarica) ui.scarica.disabled = false; setProgress(null); }
+    const dlButtons = () => [ui.scarica, ui.scaricaTutte, ui.aggiorna, ui.svuotaCache].filter(Boolean);
+    function beginBusy() { busy = true; dlButtons().forEach(b => { b.disabled = true; }); }
+    function endBusy() {
+        busy = false;
+        batchRunning = false; abortBatch = false;
+        dlButtons().forEach(b => { b.disabled = false; });
+        if (ui.scaricaTutte) ui.scaricaTutte.textContent = 'Scarica tutte';
+        if (ui.aggiorna) ui.aggiorna.textContent = 'Aggiorna';
+        setProgress(null);
+    }
     const fmtN = n => n.toLocaleString('it-IT');
 
     // Riepilogo "Regione: DD/MM/AAAA" per le regioni di cui conosciamo la data del dataset
@@ -569,12 +682,14 @@
     /* Download regione + parsing in indice compatto                       */
     /* ------------------------------------------------------------------ */
 
-    async function downloadRegion(reg) {
-        if (busy) return;
-        beginBusy();
-        status(`Scarico indirizzario ${regNome(reg)}\u2026`);
-        const buf = await gmFetchBinary(ANNCSU_DL + reg, p => { setProgress(p * 45); status(`Scarico indirizzario ${regNome(reg)}\u2026 ${Math.round(p * 100)}%`); });
-        status(`Elaboro ${regNome(reg)}\u2026`);
+    // Scarica + elabora UNA regione e la salva in IndexedDB. Non tocca busy ne' la memoria:
+    // cosi' la stessa funzione serve sia al singolo scarico sia ai cicli su piu' regioni.
+    // onProgress(frazione 0..1, testo) permette al chiamante di comporre una barra complessiva.
+    async function fetchRegionRecord(reg, onProgress) {
+        const nome = regNome(reg);
+        const buf = await gmFetchBinary(ANNCSU_DL + reg,
+            p => onProgress(p * 0.45, `Scarico indirizzario ${nome}\u2026 ${Math.round(p * 100)}%`));
+        onProgress(0.45, `Elaboro ${nome}\u2026`);
 
         // Nome del file CSV dentro lo ZIP: l'Agenzia ci scrive la data di creazione dell'estratto
         // (non e' una colonna del CSV, va letta li'). Se il pattern cambia, il nome grezzo resta in console.
@@ -588,23 +703,97 @@
         } catch (e) { /* niente data, non e' bloccante */ }
         log('file dentro lo zip:', fileName, '\u00b7 data riconosciuta:', fileDate || '(pattern non riconosciuto)');
 
-        const rec = await parseIndirToRecord(new Uint8Array(buf), reg, regNome(reg),
-            (p, read, kept) => { setProgress(45 + p * 55); status(`Elaboro ${regNome(reg)}\u2026 ${Math.round(p * 100)}% &middot; lette ${fmtN(read)} &middot; con coordinate ${fmtN(kept)}`); });
+        const rec = await parseIndirToRecord(new Uint8Array(buf), reg, nome,
+            (p, read, kept) => onProgress(0.45 + p * 0.55, `Elaboro ${nome}\u2026 ${Math.round(p * 100)}% &middot; lette ${fmtN(read)} &middot; con coordinate ${fmtN(kept)}`));
         rec.fileName = fileName;
         rec.fileDate = fileDate;
+        if (rec.count) await idb.put('regioni', rec);
+        return rec;
+    }
+
+    function readyStatus(regs) {
+        markUpdateDue(regs);
+        const mb = (mem.n * 14 / 1048576).toFixed(0);
+        status(`Pronto: <b>${fmtN(mem.n)}</b> civici in memoria (~${mb} MB, ${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsDateLabel(regs)} Cache locale: al prossimo avvio &egrave; gi&agrave; tutto caricato.`);
+    }
+
+    async function downloadRegion(reg) {
+        if (busy) return;
+        beginBusy();
+        const rec = await fetchRegionRecord(reg, (f, txt) => { setProgress(f * 100); status(txt); });
         if (!rec.count) {
             status(`<span style="color:#c00">Nessun civico con coordinate riconosciuto in ${regNome(reg)}.</span> Prima riga del file (per diagnosi) in console.`);
             log('DIAGNOSI prima riga dati:', rec.diag || '(vuota)');
             endBusy();
             return;
         }
-        await idb.put('regioni', rec);
         const regs = await idb.all('regioni');
         rebuildMemory(regs);
         endBusy();
-        const mb = (mem.n * 14 / 1048576).toFixed(0);
-        status(`Pronto: <b>${fmtN(mem.n)}</b> civici in memoria (~${mb} MB, ${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsDateLabel(regs)} Cache locale: al prossimo avvio &egrave; gi&agrave; tutto caricato.`);
-        toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (fileDate ? ` Dataset del ${fileDate}.` : ''));
+        readyStatus(regs);
+        toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (rec.fileDate ? ` Dataset del ${rec.fileDate}.` : ''));
+    }
+
+    // Ciclo su piu' regioni: una alla volta, con barra complessiva e possibilita' di fermarsi.
+    // La memoria viene ricostruita una volta sola alla fine, non a ogni regione.
+    async function downloadRegions(list, titolo, btn) {
+        if (busy || !list.length) return;
+        beginBusy();
+        batchRunning = true; abortBatch = false;
+        if (btn) { btn.disabled = false; btn.textContent = 'Ferma'; }
+        const ok = [], ko = [];
+        for (let i = 0; i < list.length; i++) {
+            if (abortBatch) break;
+            const reg = list[i];
+            const capo = `${titolo} ${i + 1}/${list.length}`;
+            try {
+                const rec = await fetchRegionRecord(reg, (f, txt) => {
+                    setProgress(((i + f) / list.length) * 100);
+                    status(`${capo} &middot; ${txt}`);
+                });
+                if (rec.count) ok.push(regNome(reg)); else ko.push(regNome(reg));
+            } catch (e) {
+                ko.push(regNome(reg));
+                log(`regione ${reg} KO:`, e && e.message);
+            }
+            await tick();
+        }
+        const fermato = abortBatch;
+        const regs = await idb.all('regioni');
+        rebuildMemory(regs);
+        endBusy();
+        readyStatus(regs);
+        let msg = fermato ? 'Fermato dall\'utente. ' : '';
+        msg += `${ok.length} region${ok.length === 1 ? 'e' : 'i'} a posto`;
+        if (ko.length) msg += `, ${ko.length} non riuscit${ko.length === 1 ? 'a' : 'e'}: ${ko.join(', ')} (riprova singolarmente)`;
+        toast(msg + '.', ko.length ? 12000 : 7000);
+    }
+
+    // Richiesta di stop: il ciclo si ferma dopo la regione che sta elaborando (quella non si butta via)
+    function stopBatch(btn) {
+        abortBatch = true;
+        if (btn) { btn.textContent = 'Mi fermo\u2026'; btn.disabled = true; }
+        toast('Mi fermo appena finisce la regione in corso.', 6000);
+    }
+
+    async function downloadAllRegions() {
+        if (busy) { if (batchRunning) stopBatch(ui.scaricaTutte); return; }
+        const conferma = confirm(
+            'Scarico tutte e 20 le regioni, una dopo l\'altra.\n\n' +
+            'Ci vogliono alcuni minuti e i dati occupano parecchio spazio fra cache locale e memoria ' +
+            'del browser. Se ti servono poche zone, conviene scaricare le singole regioni.\n\n' +
+            'Puoi fermarti quando vuoi con il tasto "Ferma".\n\nVuoi procedere?'
+        );
+        if (!conferma) return;
+        await downloadRegions(REGIONI.map(r => r[0]), 'Scarico tutte le regioni', ui.scaricaTutte);
+    }
+
+    async function refreshDownloadedRegions() {
+        if (busy) { if (batchRunning) stopBatch(ui.aggiorna); return; }
+        const regs = await idb.all('regioni');
+        const list = regs.map(r => r.reg).filter(Boolean);
+        if (!list.length) { toast('Non hai ancora nessuna regione in locale: scaricane una con "Scarica regione".', 7000); return; }
+        await downloadRegions(list, 'Aggiorno le regioni scaricate', ui.aggiorna);
     }
 
     // Legge lo ZIP (o CSV) e produce un record compatto: Float32 lon/lat + id gruppo per civico,
@@ -988,19 +1177,224 @@
         } catch (e) { /* pazienza */ }
     }
 
-    let lastMouse = { alt: false, shift: false, ctrl: false, t: 0 };
+    // Combinazioni di modificatori delle modalita' fisse. Sono scelte apposta fra quelle che il WME
+    // NON usa (MAIUSC e CTRL da soli servono alla multi-selezione) e che non si accavallano con le
+    // scorciatoie degli script piu' diffusi, che lavorano quasi sempre a tasto singolo.
+    const MODE_MODS = {
+        alt: { alt: true, shift: false, ctrl: false },
+        altshift: { alt: true, shift: true, ctrl: false },
+        ctrlalt: { alt: true, shift: false, ctrl: true }
+    };
+    const MODE_TXT = {
+        alt: 'ALT',
+        altshift: 'ALT + MAIUSC',
+        ctrlalt: 'CTRL/\u2318 + ALT'
+    };
+    // corrispondenza ESATTA: cosi' ALT+MAIUSC non fa scattare per sbaglio la modalita' ALT
+    function modsMatch(m, e) {
+        return !!m.alt === !!e.alt && !!m.shift === !!e.shift && !!m.ctrl === !!e.ctrl;
+    }
+
+    let lastMouse = { alt: false, shift: false, ctrl: false, custom: false, t: 0 };
     let suppressUntil = 0;
+
+    /* ------------------------------------------------------------------ */
+    /* Tasto di cattura personalizzato                                     */
+    /* ------------------------------------------------------------------ */
+    // ALT resta il default: qui l'editor puo' registrare UN SOLO tasto della tastiera, che viene
+    // salvato in locale e da quel momento vale sempre (anche ai riavvii del browser). Un tasto solo,
+    // non combinazioni: e' quello che si tiene premuto mentre si clicca il segmento.
+
+    const heldKeys = new Set();       // tasti fisici attualmente premuti (e.code)
+    let recordingKey = false;         // true mentre si aspetta il tasto da registrare
+    let listenArmed = false;          // true dopo il clic sul badge: solo allora si legge la tastiera
+    let pendingKey = null;            // tasto letto ma non ancora confermato dall'editor
+
+    const MOD_CODES = /^(Alt|Shift|Control|Meta|OS)(Left|Right)?$/;
+
+    // Accetta sia il formato vecchio { code, name } sia quello a combinazione { codes[], names[] }
+    // e riduce tutto a UN solo tasto: { code, name }
+    function normKeyChoice(k) {
+        if (!k || typeof k !== 'object') return null;
+        const code = k.code || (Array.isArray(k.codes) ? k.codes[0] : null);
+        if (!code || MOD_CODES.test(code)) return null;
+        const name = k.name || (Array.isArray(k.names) ? k.names[0] : '') || codeName(code, '');
+        return { code, name };
+    }
+
+    // Etichetta leggibile del tasto: "Q", "F2", "SPAZIO"...
+    function keyLabel(k) {
+        return (k && k.name) ? k.name : 'nessuno';
+    }
+
+    // Nome breve del tasto fisico, indipendente dalla lingua della tastiera
+    function codeName(code, key) {
+        if (!code) return '';
+        let m = /^Key([A-Z])$/.exec(code); if (m) return m[1];
+        m = /^Digit(\d)$/.exec(code); if (m) return m[1];
+        m = /^Numpad(\d)$/.exec(code); if (m) return 'Num' + m[1];
+        m = /^(F\d{1,2})$/.exec(code); if (m) return m[1];
+        if (code === 'Space') return 'SPAZIO';
+        if (code === 'Backquote') return '`';
+        if (code === 'Minus') return '-';
+        if (code === 'Equal') return '=';
+        if (code === 'BracketLeft') return '[';
+        if (code === 'BracketRight') return ']';
+        if (code === 'Backslash') return '\\';
+        if (code === 'Semicolon') return ';';
+        if (code === 'Quote') return "'";
+        if (code === 'Comma') return ',';
+        if (code === 'Period') return '.';
+        if (code === 'Slash') return '/';
+        if (code === 'CapsLock') return 'BLOC MAIUSC';
+        const k = String(key || '').trim();
+        return k && k.length <= 12 ? k.toUpperCase() : code;
+    }
+
+    function isTypingTarget(el) {
+        if (!el) return false;
+        const t = (el.tagName || '').toUpperCase();
+        return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || el.isContentEditable === true;
+    }
+
+    // Il tasto registrato e' premuto in questo istante? I modificatori non contano: conta solo
+    // che il tasto scelto sia giu' al momento del clic.
+    function customKeyActive() {
+        const k = settings.captureKey;
+        return !!(k && k.code && heldKeys.has(k.code));
+    }
+
+    // E' il tasto scelto? Serve a zittire la scorciatoia WME mentre lo si tiene premuto.
+    function isChosenCode(code) {
+        const k = settings.captureKey;
+        return !!(k && k.code === code);
+    }
+
+    function startKeyRecording() {
+        if (recordingKey) return;
+        recordingKey = true;
+        listenArmed = false;   // prima il clic sul badge: cosi' il focus e' qui e la tastiera si legge davvero
+        pendingKey = null;
+        heldKeys.clear();
+        updateKeyRow();
+        toast('Clicca il riquadro rosso per attivare l\'ascolto, poi premi UN SOLO tasto della tastiera. ESC annulla.', 9000);
+    }
+
+    // Il clic sul badge arma la lettura: da qui in poi il primo tasto premuto viene letto
+    function armKeyListening() {
+        if (!recordingKey) { startKeyRecording(); return; }
+        if (listenArmed) return;
+        listenArmed = true;
+        heldKeys.clear();
+        updateKeyRow();
+        toast('In ascolto: premi ora UN SOLO tasto della tastiera, quello che vuoi tenere premuto mentre clicchi i segmenti. ESC annulla.', 9000);
+    }
+
+    // Letto il tasto: NON si salva subito, prima lo si mostra e si chiede conferma
+    function keyRead(code, key) {
+        const k = normKeyChoice({ code, name: codeName(code, key) });
+        if (!k) return;
+        recordingKey = false;
+        listenArmed = false;
+        pendingKey = k;
+        updateKeyRow();
+        toast(`Letto il tasto ${keyLabel(k)}. Premi "Conferma" per salvarlo oppure "Rifai" per sceglierne un altro.`, 9000);
+    }
+
+    // Conferma esplicita dell'editor: solo qui il tasto diventa quello buono
+    function confirmKeyCombo() {
+        if (!pendingKey) return;
+        const k = pendingKey;
+        pendingKey = null;
+        listenArmed = false;
+        settings.captureKey = k;
+        settings.captureMode = 'custom';
+        saveSettings();
+        syncCapUI();
+        toast(`Tasto salvato: tieni premuto ${keyLabel(k)} e clicca un segmento per metterlo in lista. Resta attivo anche alle prossime sessioni.`, 8000);
+    }
+
+    function cancelKeyRecording(msg) {
+        if (!recordingKey && !pendingKey) return;
+        recordingKey = false;
+        listenArmed = false;
+        pendingKey = null;
+        // annullata senza aver mai confermato nulla: si torna al default ALT, mai una cattura muta
+        if (settings.captureMode === 'custom' && !settings.captureKey) { settings.captureMode = 'alt'; saveSettings(); }
+        syncCapUI();
+        if (msg) toast(msg);
+    }
+
+    // Badge e bottoni della riga: tre stati (in ascolto / in attesa di conferma / a riposo)
+    function updateKeyRow() {
+        if (!ui.keyshow) return;
+        const show = (el, on) => { if (el) el.style.display = on ? '' : 'none'; };
+        ui.keyshow.classList.toggle('wfit-rec', !!recordingKey);
+        ui.keyshow.classList.toggle('wfit-pend', !recordingKey && !!pendingKey);
+        if (recordingKey) {
+            ui.keyshow.textContent = listenArmed ? 'premi un tasto\u2026' : 'cliccami per attivare l\'ascolto del tasto';
+            ui.keyshow.title = listenArmed ? 'In ascolto: premi il tasto che vuoi usare' : 'Clicca qui, poi premi il tasto che vuoi usare';
+            if (ui.keyset) ui.keyset.textContent = 'Annulla';
+        } else {
+            ui.keyshow.textContent = keyLabel(pendingKey || settings.captureKey);
+            ui.keyshow.title = pendingKey ? 'Tasto letto: conferma o rifai' : 'Tasto attualmente in uso';
+            if (ui.keyset) ui.keyset.textContent = 'Cambia';
+        }
+        show(ui.keyset, !pendingKey || recordingKey);
+        show(ui.keyok, !recordingKey && !!pendingKey);
+        show(ui.keyredo, !recordingKey && !!pendingKey);
+        show(ui.keyclr, !recordingKey && !pendingKey);
+        if (ui.keyrow) ui.keyrow.style.display = (settings.captureMode === 'custom' || settings.captureKey || recordingKey || pendingKey) ? '' : 'none';
+        if (ui.keyclr) ui.keyclr.disabled = !settings.captureKey;
+    }
+
+    // Riallinea tutta la UI della cattura dopo un cambio da codice (scorciatoia, azzeramento...)
+    function syncCapUI() {
+        if (ui.capmode) ui.capmode.value = settings.captureMode;
+        updateKeyRow();
+        updateCapturedUI();
+    }
+
     if (typeof document !== 'undefined') {
         document.addEventListener('mousedown', e => {
-            lastMouse = { alt: e.altKey, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, t: Date.now() };
+            lastMouse = { alt: e.altKey, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, custom: customKeyActive(), t: Date.now() };
         }, true);
+
+        document.addEventListener('keydown', e => {
+            if (recordingKey) {
+                if (!listenArmed) return;   // non ancora armato: la tastiera resta al WME
+                if (isTypingTarget(e.target) && e.key !== 'Escape') return;
+                e.preventDefault(); e.stopPropagation();
+                if (e.key === 'Escape') { cancelKeyRecording('Registrazione annullata: resta il tasto di prima.'); return; }
+                if (e.repeat) return;
+                // un tasto solo: i modificatori (ALT, MAIUSC, CTRL) non si possono scegliere qui,
+                // per quelli ci sono gia' le voci fisse del menu Cattura
+                if (MOD_CODES.test(e.code || '')) {
+                    toast('ALT, MAIUSC e CTRL non valgono come tasto personalizzato: per quelli usa le voci del menu Cattura. Premi un tasto normale.', 7000);
+                    return;
+                }
+                keyRead(e.code, e.key);
+                return;
+            }
+            if (e.repeat) return;
+            heldKeys.add(e.code);
+            // mentre si tiene premuto il tasto scelto zittiamo l'eventuale scorciatoia del WME
+            // sullo stesso tasto (non quando si sta scrivendo in un campo)
+            if (settings.captureMode === 'custom' && isChosenCode(e.code) && !isTypingTarget(e.target)) {
+                e.preventDefault(); e.stopPropagation();
+            }
+        }, true);
+
+        document.addEventListener('keyup', e => { heldKeys.delete(e.code); }, true);
+        window.addEventListener('blur', () => { heldKeys.clear(); if (recordingKey) cancelKeyRecording(); });
+        document.addEventListener('visibilitychange', () => { if (document.hidden) heldKeys.clear(); });
     }
 
     function capModeLabel() {
-        switch (settings.captureMode) {
-            case 'alt': return 'Cattura con ALT+clic: clic normale = editor normale.';
-            case 'shift': return 'Cattura con MAIUSC+clic: clic normale = editor normale.';
-            case 'ctrl': return 'Cattura con CTRL/\u2318+clic (attento: il WME lo usa per la multi-selezione).';
+        const m = settings.captureMode;
+        if (MODE_TXT[m]) return `Cattura con ${MODE_TXT[m]} + clic: clic normale = editor normale.`;
+        switch (m) {
+            case 'custom': return `Cattura con ${keyLabel(settings.captureKey)} + clic: clic normale = editor normale.`;
             case 'always': return 'Cattura sempre attiva: ogni clic sui segmenti finisce in lista.';
             default: return 'Cattura spenta: usa "Aggiungi selezione attuale".';
         }
@@ -1014,7 +1408,8 @@
         if (mode === 'off') return;
         if (mode !== 'always') {
             const fresh = Date.now() - lastMouse.t < 900;
-            const key = mode === 'alt' ? lastMouse.alt : mode === 'shift' ? lastMouse.shift : lastMouse.ctrl;
+            const key = mode === 'custom' ? lastMouse.custom
+                : (MODE_MODS[mode] ? modsMatch(MODE_MODS[mode], lastMouse) : false);
             if (!(fresh && key)) return;
         }
         captureIds(ids, true);
@@ -1045,6 +1440,7 @@
         lastResults = [];
         lastPtsByG = new Map();
         lastDotFeatures = [];
+        lastDupCount = 0;
         refreshMapLayer();
         if (ui.results) ui.results.innerHTML = 'Lista vuota: cattura qualche segmento per vedere qui odonimi e civici.';
     }
@@ -1052,8 +1448,8 @@
     function updateCapturedUI() {
         if (!ui.selinfo) return;
         if (!captured.size) {
-            const keyTxt = settings.captureMode === 'alt' ? 'ALT' : settings.captureMode === 'shift' ? 'MAIUSC' : settings.captureMode === 'ctrl' ? 'CTRL/\u2318' : null;
-            ui.selinfo.innerHTML = `Lista vuota. ${keyTxt ? `<b>${keyTxt}+clic</b> su un segmento per aggiungerlo (${keyTxt}+ri-clic per toglierlo).` : settings.captureMode === 'always' ? 'Clicca i segmenti sulla mappa.' : 'Usa "Aggiungi selezione attuale".'}`;
+            const keyTxt = MODE_TXT[settings.captureMode] || (settings.captureMode === 'custom' ? escapeHtml(keyLabel(settings.captureKey)) : null);
+            ui.selinfo.innerHTML = `Lista vuota. ${keyTxt ? `<b>${keyTxt} + clic</b> su un segmento per aggiungerlo (stessa combinazione per toglierlo).` : settings.captureMode === 'always' ? 'Clicca i segmenti sulla mappa.' : 'Usa "Aggiungi selezione attuale".'}`;
             return;
         }
         const ids = [...captured.keys()];
@@ -1322,21 +1718,30 @@
             .slice(0, 8);
         lastResults.forEach((r, idx) => { r.color = PALETTE[idx % PALETTE.length]; });
 
-        // civici agganciati per odonimo (deduplicati): servono al disegno e all'inserimento su Waze
+        // civici agganciati per odonimo, DEDUPLICATI: lo stesso numero civico puo' arrivare piu'
+        // volte (piu' accessi ANNCSU sullo stesso numero, oppure lo stesso punto agganciato da due
+        // segmenti diversi della lista). Waze rifiuterebbe i doppioni, quindi ne teniamo uno solo:
+        // quello piu' vicino alla strada. Gli accessi senza numero restano distinti per posizione.
         lastPtsByG = new Map();
-        pts.sort((a, b) => a.d - b.d);
+        pts.sort((a, b) => a.d - b.d); // ordine per distanza: il primo che passa e' il piu' vicino
         const seenHN = new Set();
+        lastDupCount = 0;
         for (const p of pts) {
             const cv = mem.civn[p.i] || 0, ce = mem.cive[p.i] || 0;
             const label = (cv ? String(cv) : '') + (ce ? '/' + mem.esps[ce] : '');
             const lon = mem.lons[p.i], lat = mem.lats[p.i];
-            const key = p.g + '|' + label + '|' + Math.round(lon * 1e5) + '|' + Math.round(lat * 1e5);
-            if (seenHN.has(key)) continue;
+            // numerati: chiave odonimo + numero/esponente (il punto NON entra nella chiave, altrimenti
+            // due rilievi dello stesso civico a 2 m di distanza passerebbero entrambi)
+            const key = label
+                ? p.g + '|#' + label
+                : p.g + '|@' + Math.round(lon * 1e5) + '|' + Math.round(lat * 1e5);
+            if (seenHN.has(key)) { if (label) lastDupCount++; continue; }
             seenHN.add(key);
             let a = lastPtsByG.get(p.g);
             if (!a) { a = []; lastPtsByG.set(p.g, a); }
             if (a.length < 300) a.push({ lon, lat, label, d: p.d });
         }
+        if (lastDupCount) log(`doppioni civici scartati nel match: ${lastDupCount}`);
 
         if (!lastResults.length) {
             ui.results.innerHTML = `Nessun civico ANNCSU entro ${radius} m. Aumenta il raggio, oppure il Comune non ha ancora caricato le coordinate nell'archivio.`;
@@ -1345,30 +1750,28 @@
             return;
         }
         renderResults(lastResults);
-        drawCivici(pts);
+        drawCivici();
     }
 
-    // Disegna sulla mappa i civici agganciati, colorati come i risultati, con etichetta = numero/esponente
-    function drawCivici(pts) {
+    // Disegna sulla mappa i civici agganciati, colorati come i risultati, con etichetta = numero/esponente.
+    // Usa la stessa lista gia' deduplicata di lastPtsByG: cosi' i puntini sulla mappa e le righe
+    // dell'elenco di controllo mostrano sempre gli stessi civici, senza doppioni.
+    function drawCivici() {
         const colorOf = new Map(lastResults.map(r => [r.g, r.color]));
-        pts.sort((a, b) => a.d - b.d);
-        const seen = new Set();
         const features = [];
-        for (const p of pts) {
-            if (!colorOf.has(p.g)) continue;
-            const lon = mem.lons[p.i], lat = mem.lats[p.i];
-            const cv = mem.civn[p.i] || 0, ce = mem.cive[p.i] || 0;
-            const label = (cv ? String(cv) : '') + (ce ? '/' + mem.esps[ce] : '');
-            // duplicati: stesso odonimo + stesso civico/esponente + stesso punto (quantizzato ~1 m)
-            const key = p.g + '|' + label + '|' + Math.round(lon * 1e5) + '|' + Math.round(lat * 1e5);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            features.push({
-                id: 'wfit-' + p.i,
-                type: 'Feature',
-                geometry: { type: 'Point', coordinates: [lon, lat] },
-                properties: { color: colorOf.get(p.g), label }
-            });
+        let n = 0;
+        for (const [g, arr] of lastPtsByG) {
+            const color = colorOf.get(g);
+            if (!color) continue;
+            for (const p of arr) {
+                features.push({
+                    id: 'wfit-' + g + '-' + (n++),
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+                    properties: { color, label: p.label }
+                });
+                if (features.length >= 500) break;
+            }
             if (features.length >= 500) break;
         }
         lastDotFeatures = features;
@@ -1431,6 +1834,14 @@
     function renderResults(results) {
         if (!ui.results || !results || !results.length) return;
         ui.results.innerHTML = '';
+        if (lastDupCount) {
+            const note = document.createElement('div');
+            note.className = 'wfit-muted';
+            note.style.marginBottom = '5px';
+            note.title = 'Stesso odonimo e stesso numero civico presenti piu\' volte nei dati ANNCSU o agganciati da piu\' segmenti: tenuto il punto piu\' vicino alla strada.';
+            note.innerHTML = `&#9888;&#65039; ${lastDupCount} doppion${lastDupCount === 1 ? 'e' : 'i'} di civici rimoss${lastDupCount === 1 ? 'o' : 'i'} dal confronto.`;
+            ui.results.appendChild(note);
+        }
         for (const r of results) {
             const base = toWazeCase(r.name);
             const prefill = applyNameRules(base);
