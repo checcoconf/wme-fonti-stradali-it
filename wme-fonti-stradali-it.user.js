@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.11
+// @version      0.1.0
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -21,6 +21,8 @@
 // @connect      www.istat.it
 // @connect      istat.it
 // @connect      raw.githubusercontent.com
+// @connect      script.google.com
+// @connect      script.googleusercontent.com
 // @run-at       document-end
 // @license      MIT
 // ==/UserScript==
@@ -55,6 +57,22 @@
     const ANNCSU_URL = 'https://www.anncsu.gov.it/it/';
     const anncsuLink = (txt) => `<a class="wfit-lic" href="${ANNCSU_URL}" target="_blank" rel="noopener noreferrer" title="ANNCSU &ndash; Archivio Nazionale dei Numeri Civici e delle Strade Urbane, sito ufficiale">${txt || 'ANNCSU'}</a>`;
 
+    /* ---------------------------------------------------------------- */
+    /* CONFIGURAZIONE ACCESSO (foglio Google + Apps Script)               */
+    /* ---------------------------------------------------------------- */
+    // 1) Pubblica il Web App di Apps Script (Distribuisci > Nuova distribuzione > Applicazione web,
+    //    "Esegui come: me", "Chi ha accesso: chiunque") e incolla qui l'URL che finisce con /exec.
+    // 2) Incolla lo STESSO token che hai messo in Proprieta' script su Apps Script (WFIT_TOKEN).
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycbyqY5rbcjPdShWcFFmBBc6P-wZmgL0Vn4t4ya_jqwGnR7iO9rVHTZ_f1zfzFj1TDftNSA/exec';        // es. https://script.google.com/macros/s/AKfy.../exec
+    const GAS_TOKEN = '1aa4f7f7330e4164bc8cc4ef3a5ea9886892ebc1';  // stringa lunga a caso, uguale a quella su Apps Script
+
+    const AUTH_KEY = 'wmeFontiIT_auth_v1';
+    const LOGQ_KEY = 'wmeFontiIT_logq_v1';
+    const AUTH_TTL_H = 2;     // ogni quante ore si richiede di nuovo il permesso al foglio
+    const AUTH_RECHECK_MIN = 30; // ricontrollo periodico mentre l'editor resta aperto
+    const AUTH_GRACE_H = 72;  // se il foglio non risponde, per quante ore vale l'ultimo "autorizzato"
+    const LOG_MAX_QUEUE = 2000;
+
     const REGIONI = [
         ['ABRU', 'Abruzzo'], ['BASI', 'Basilicata'], ['CALA', 'Calabria'], ['CAMP', 'Campania'],
         ['EMIL', 'Emilia-Romagna'], ['FRIU', 'Friuli-Venezia Giulia'], ['LAZI', 'Lazio'], ['LIGU', 'Liguria'],
@@ -86,6 +104,8 @@
     let lastDupCount = 0;             // doppioni civici scartati nell'ultimo confronto
     let analyzeTimer = null;
     let busy = false;
+    let authInfo = { ok: false, user: '', reason: '', code: 401 };
+    let panelEl = null;
     let batchRunning = false;         // ciclo su piu' regioni in corso
     let abortBatch = false;           // richiesta di fermarsi dopo la regione in corso
 
@@ -195,6 +215,355 @@
     };
 
     /* ------------------------------------------------------------------ */
+    /* Autorizzazione e log (foglio Google tramite Apps Script)            */
+    /* ------------------------------------------------------------------ */
+
+    // Id di sessione: serve solo a raggruppare nel foglio le righe di log di una stessa
+    // sessione di lavoro (non identifica nulla di piu' del nome utente WME, gia' pubblico).
+    const SESSION_ID = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+
+    // Copia-incolla tollerante: spazi, a capo, barra finale e ?query vengono tolti da soli
+    const gasUrl = () => String(GAS_URL || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
+    const gasToken = () => String(GAS_TOKEN || '').trim();
+    const gasConfigured = () => /^https:\/\/script\.google\.com\/macros\/s\/[^\s]+\/exec$/.test(gasUrl());
+
+    // Perche' la configurazione non va bene: messaggio che dice cosa ha letto davvero lo script
+    function gasConfigProblema() {
+        const u = gasUrl();
+        if (!u || /^INCOLLA/i.test(u)) return 'la riga GAS_URL e\' ancora quella di esempio: apri lo script in Tampermonkey e incolla l\'indirizzo che finisce con /exec.';
+        if (/\/dev$/.test(u)) return 'hai incollato l\'indirizzo di prova (/dev): serve quello della distribuzione, che finisce con /exec.';
+        if (!/^https:\/\/script\.google\.com\//.test(u)) return `l'indirizzo non e' quello di un web app Apps Script (letto: ${u.slice(0, 60)}).`;
+        if (!/\/exec$/.test(u)) return `l'indirizzo non finisce con /exec (letto: ${u.slice(0, 60)}\u2026).`;
+        return `indirizzo non riconosciuto (letto: ${u.slice(0, 60)}\u2026).`;
+    }
+
+    // Chiamata al Web App. Content-Type text/plain: Apps Script lo accetta e non scatena
+    // preflight; il corpo resta comunque JSON.
+    function gasCall(payload, timeoutMs = 20000) {
+        return new Promise((resolve, reject) => {
+            if (!gasConfigured()) { reject(new Error('web app non configurato')); return; }
+            try {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: gasUrl(),
+                    timeout: timeoutMs,
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    data: JSON.stringify(Object.assign({ token: gasToken(), client: VERSION }, payload)),
+                    onload: r => {
+                        if (r.status < 200 || r.status >= 300) { reject(new Error('HTTP ' + r.status)); return; }
+                        let j = null;
+                        try { j = JSON.parse(r.responseText); }
+                        catch { reject(new Error('risposta non leggibile dal foglio')); return; }
+                        resolve(j);
+                    },
+                    onerror: () => reject(new Error('rete non raggiungibile')),
+                    ontimeout: () => reject(new Error('nessuna risposta entro il tempo massimo'))
+                });
+            } catch (e) { reject(e); }
+        });
+    }
+
+    // Nome utente WME: prima l'SDK, poi il modello legacy
+    function currentUser() {
+        const out = { name: '', rank: null, id: null };
+        try {
+            const i = (sdk.State && typeof sdk.State.getUserInfo === 'function') ? sdk.State.getUserInfo() : null;
+            if (i) { out.name = i.userName || i.username || i.name || ''; out.rank = i.rank != null ? i.rank : null; out.id = i.id != null ? i.id : null; }
+        } catch { /* sotto */ }
+        if (!out.name) {
+            try {
+                const u = WME().loginManager && WME().loginManager.user;
+                const a = u && (u.attributes || u);
+                if (a) { out.name = a.userName || a.username || ''; if (out.rank == null && a.rank != null) out.rank = a.rank; if (out.id == null && a.id != null) out.id = a.id; }
+            } catch { /* pazienza */ }
+        }
+        if (out.rank == null) out.rank = userRank();
+        return out;
+    }
+
+    // Il WME conta i rank da zero: rank 0 = L1, rank 1 = L2... Nei fogli scriviamo il
+    // livello come lo legge l'editor, non il numero interno.
+    const livelloDaRank = r => (r == null || r === '' || isNaN(r)) ? '' : Number(r) + 1;
+
+    function readAuthCache(user) {
+        try {
+            const c = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
+            if (!c || c.user !== user) return null;
+            return c;
+        } catch { return null; }
+    }
+    function writeAuthCache(c) { try { localStorage.setItem(AUTH_KEY, JSON.stringify(c)); } catch { /* ignora */ } }
+    function clearAuthCache() { try { localStorage.removeItem(AUTH_KEY); } catch { /* ignora */ } }
+
+    // Ritorna { ok, user, reason, ruolo, offline }
+    async function checkAuthorization(force) {
+        const u = currentUser();
+        if (!u.name) return { ok: false, code: 401, user: '', reason: 'non riesco a leggere il tuo nome utente Waze: ricarica l\'editor e riprova.' };
+        if (!gasConfigured()) {
+            return { ok: false, code: 401, user: u.name, reason: gasConfigProblema() };
+        }
+        if (!gasToken() || /^INCOLLA/i.test(gasToken())) {
+            return { ok: false, code: 401, user: u.name, reason: 'la riga GAS_TOKEN e\' ancora quella di esempio: incolla il token stampato da setup() sul foglio.' };
+        }
+        const cached = readAuthCache(u.name);
+        if (!force && cached && cached.ok && Date.now() - cached.ts < AUTH_TTL_H * 3600000) {
+            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota, cached: true };
+        }
+        try {
+            const r = await gasCall({ action: 'auth', user: u.name, rank: u.rank, livello: livelloDaRank(u.rank), userId: u.id, sessione: SESSION_ID });
+            const ok = !!(r && r.ok && r.autorizzato);
+            writeAuthCache({ user: u.name, ok, ts: Date.now(), ruolo: r && r.ruolo, nota: r && r.nota });
+            if (ok) return { ok: true, user: u.name, ruolo: r.ruolo, nota: r.nota };
+            return { ok: false, code: 401, user: u.name, reason: (r && (r.messaggio || r.motivo)) || 'utente non presente nell\'elenco degli abilitati.' };
+        } catch (e) {
+            // Il foglio non risponde: se poco fa eri abilitato si continua per un periodo di
+            // tolleranza, altrimenti si resta chiusi (in caso di dubbio non si apre).
+            if (cached && cached.ok && Date.now() - cached.ts < AUTH_GRACE_H * 3600000) {
+                return { ok: true, user: u.name, ruolo: cached.ruolo, offline: true, reason: e.message };
+            }
+            return { ok: false, code: 401, user: u.name, reason: 'non riesco a verificare l\'abilitazione (' + e.message + ').' };
+        }
+    }
+
+    function deniedHtml(info) {
+        return `
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-sec wfit-401">
+    <div class="wfit-401code">401 Unauthorized</div>
+    <p><b>Utente Waze:</b> ${escapeHtml(info.user || 'sconosciuto')}</p>
+    <p>Questo script &egrave; riservato agli editor abilitati. <b>Contattare i coordinatori per l'abilitazione.</b></p>
+    <p class="wfit-muted">Dettaglio: ${escapeHtml(info.reason || '')}</p>
+    <div class="wfit-row">
+      <button class="wfit-btn wfit-primary" id="wfit-401-retry">Ho ricevuto l'abilitazione: ricontrolla</button>
+    </div>
+    <p class="wfit-muted">Per l'abilitazione scrivi ai coordinatori della community italiana o all'autore ${slackLink()}.</p>
+  </div>`;
+    }
+
+    function renderDenied(info) {
+        if (!panelEl) return;
+        panelEl.innerHTML = deniedHtml(info);
+        const b = panelEl.querySelector('#wfit-401-retry');
+        if (b) b.addEventListener('click', async () => {
+            b.disabled = true; b.textContent = 'Controllo in corso\u2026';
+            clearAuthCache();
+            const r = await checkAuthorization(true);
+            if (r.ok) { authInfo = r; startFeatures(); }
+            else { renderDenied(r); }
+        });
+        log('accesso negato:', info.reason);
+    }
+
+    /* ---------------------------- coda dei log ---------------------------- */
+
+    let logQueue = [];
+    let logFlushTimer = null, logFlushing = false;
+
+    // Righe che descrivono una modifica alla mappa: restano qui finche' l'editor non salva.
+    // Solo in memoria: se ricarichi la pagina senza salvare, le modifiche non esistono piu'
+    // e le loro righe se ne vanno con loro.
+    let pendingLog = [];
+    let lastUnsaved = 0, lastUndoAt = 0, saveEventSeen = false, saveTracking = true;
+    let contatoreOk = false;
+    const PENDING_MAX_MIN = 10;   // oltre questo, una riga in sospeso viene scritta comunque
+
+    function loadLogQueue() {
+        try { const a = JSON.parse(localStorage.getItem(LOGQ_KEY) || '[]'); if (Array.isArray(a)) logQueue = a; }
+        catch { logQueue = []; }
+    }
+    function saveLogQueue() {
+        try { localStorage.setItem(LOGQ_KEY, JSON.stringify(logQueue.slice(-LOG_MAX_QUEUE))); } catch { /* ignora */ }
+    }
+
+    // Una riga di log. I campi vengono mappati sulle colonne dal lato Google:
+    // aggiungere una chiave qui e la colonna nel foglio basta, l'ordine non conta.
+    function logEvent(azione, extra) {
+        if (!authInfo.ok) return;
+        const u = authInfo.user || '';
+        const riga = Object.assign({
+            ts: new Date().toISOString(),
+            utente: u,
+            livello: livelloDaRank(authInfo.rank),
+            versione: VERSION,
+            sessione: SESSION_ID,
+            azione
+        }, extra || {});
+
+        // Solo cio' che ha davvero cambiato la mappa aspetta il salvataggio: errori, duplicati
+        // e "gia' a posto" non modificano niente, quindi si registrano subito.
+        const modificaMappa = riga.esito === 'modificato' || riga.esito === 'inserito';
+        if (modificaMappa && saveTracking) {
+            pendingLog.push(riga);
+            if (pendingLog.length > LOG_MAX_QUEUE) pendingLog.splice(0, pendingLog.length - LOG_MAX_QUEUE);
+        } else {
+            if (modificaMappa) riga.motivo = (riga.motivo ? riga.motivo + ' \u00b7 ' : '') + 'salvataggio non verificabile su questo editor';
+            enqueueLog(riga);
+        }
+    }
+
+    // Una riga vera e propria della coda di invio
+    function enqueueLog(riga) {
+        logQueue.push(riga);
+        if (logQueue.length > LOG_MAX_QUEUE) logQueue.splice(0, logQueue.length - LOG_MAX_QUEUE);
+        saveLogQueue();
+        scheduleLogFlush(3000);
+    }
+
+    /* ------------------ aggancio al salvataggio del WME ------------------ */
+
+    // Nomi possibili dell'evento di salvataggio: l'SDK li ha aggiunti in versioni diverse,
+    // si prova a registrarli tutti e vale quello che risponde. Se non ne funziona nessuno
+    // resta il contatore delle modifiche non salvate come riprova.
+    const SAVE_EVENTS = ['wme-save-finished', 'wme-save-succeeded', 'wme-save-success', 'wme-save-completed'];
+
+    function initSaveTracking() {
+        let agganciati = 0;
+        for (const nome of SAVE_EVENTS) {
+            try {
+                sdk.Events.on({ eventName: nome, eventHandler: p => onSaveEvent(p) });
+                agganciati++;
+            } catch { /* questa versione dell'SDK non ha questo evento */ }
+        }
+        try { sdk.Events.on({ eventName: 'wme-after-undo', eventHandler: () => { lastUndoAt = Date.now(); } }); }
+        catch { /* senza questo, un annullamento potrebbe passare per salvataggio */ }
+
+        const n = unsavedCount();
+        contatoreOk = (n !== null);
+        lastUnsaved = n || 0;
+        saveTracking = contatoreOk || agganciati > 0;
+        if (!saveTracking) {
+            log('salvataggi non rilevabili su questa versione del WME: le righe verranno scritte subito');
+            return;
+        }
+        setInterval(controllaSalvataggio, 2000);
+        log(`salvataggi seguiti \u00b7 eventi SDK agganciati: ${agganciati} \u00b7 contatore modifiche: ${contatoreOk ? 'ok' : 'non disponibile'}`);
+    }
+
+    function onSaveEvent(p) {
+        if (p && (p.success === false || p.error)) return;   // salvataggio fallito: si resta in attesa
+        saveEventSeen = true;
+        promuoviPending('');
+    }
+
+    // Il contatore delle modifiche non salvate torna a zero: o hai salvato, o hai annullato tutto.
+    // Un annullamento appena avvenuto fa scartare le righe, non scriverle.
+    function controllaSalvataggio() {
+        const n = unsavedCount();
+        if (n != null) {
+            if (!contatoreOk) { contatoreOk = true; log('contatore modifiche ora disponibile'); }
+            if (lastUnsaved > 0 && n === 0 && pendingLog.length) {
+                if (Date.now() - lastUndoAt < 4000) scartaPending();
+                else promuoviPending('');
+            }
+            lastUnsaved = n;
+        }
+        scadenzaPending();
+    }
+
+    // Rete di sicurezza: se il salvataggio non si riesce a rilevare (evento mai arrivato e
+    // contatore non disponibile), dopo PENDING_MAX_MIN le righe vengono scritte lo stesso,
+    // segnalando che il salvataggio non e' stato verificato. Meglio una riga con la nota
+    // che nessuna riga.
+    function scadenzaPending() {
+        if (!pendingLog.length) return;
+        if (contatoreOk || saveEventSeen) return;   // il rilevamento funziona: si aspetta
+        const limite = Date.now() - PENDING_MAX_MIN * 60000;
+        const scadute = pendingLog.filter(r => Date.parse(r.ts) < limite);
+        if (!scadute.length) return;
+        pendingLog = pendingLog.filter(r => Date.parse(r.ts) >= limite);
+        for (const r of scadute) {
+            r.salvato = '';
+            r.motivo = (r.motivo ? r.motivo + ' \u00b7 ' : '') + 'salvataggio non verificato';
+            enqueueLog(r);
+        }
+        log(`${scadute.length} ${pl(scadute.length, 'riga scritta', 'righe scritte')} senza conferma di salvataggio`);
+        aggiornaPendingUI();
+        flushLogs();
+    }
+
+    function promuoviPending(nota) {
+        if (!pendingLog.length) return;
+        const quando = new Date().toISOString();
+        const n = pendingLog.length;
+        for (const r of pendingLog) {
+            r.salvato = quando;
+            if (nota) r.motivo = (r.motivo ? r.motivo + ' \u00b7 ' : '') + nota;
+            enqueueLog(r);
+        }
+        pendingLog = [];
+        log(`${n} ${pl(n, 'riga registrata', 'righe registrate')} dopo il salvataggio`);
+        aggiornaPendingUI();
+        flushLogs();
+    }
+
+    function scartaPending() {
+        const n = pendingLog.length;
+        pendingLog = [];
+        log(`${n} ${pl(n, 'riga scartata', 'righe scartate')}: modifiche annullate prima del salvataggio`);
+        aggiornaPendingUI();
+    }
+
+    // Promemoria nel pannello: quello che non e' ancora salvato non e' ancora nel registro
+    function aggiornaPendingUI() {
+        if (!ui || !ui.datastatus) return;
+        const vecchio = document.getElementById('wfit-pending');
+        if (vecchio) vecchio.remove();
+        if (!pendingLog.length) return;
+        const d = document.createElement('div');
+        d.id = 'wfit-pending';
+        d.className = 'wfit-muted';
+        d.textContent = `${pendingLog.length} ${pl(pendingLog.length, 'modifica in attesa di salvataggio', 'modifiche in attesa di salvataggio')}: finiranno nel registro solo dopo Ctrl+S.`;
+        ui.datastatus.parentNode.insertBefore(d, ui.datastatus.nextSibling);
+    }
+
+    function scheduleLogFlush(ms) {
+        clearTimeout(logFlushTimer);
+        logFlushTimer = setTimeout(flushLogs, ms);
+    }
+
+    async function flushLogs() {
+        if (logFlushing || !logQueue.length || !authInfo.ok || !gasConfigured()) return;
+        logFlushing = true;
+        const batch = logQueue.slice(0, 300);
+        try {
+            const r = await gasCall({ action: 'log', user: authInfo.user, sessione: SESSION_ID, rows: batch }, 30000);
+            if (r && r.ok) {
+                logQueue.splice(0, batch.length);
+                saveLogQueue();
+            }
+            // il foglio risponde SEMPRE anche con lo stato di abilitazione: se nel frattempo
+            // l'utente e' stato tolto dall'elenco, lo script si chiude subito
+            if (r && r.autorizzato === false) {
+                lockDown((r.messaggio || 'abilitazione revocata dai coordinatori.'));
+                return;
+            }
+        } catch (e) {
+            log('log non inviati (riprovo piu\' tardi):', e.message);
+        } finally {
+            logFlushing = false;
+            if (logQueue.length) scheduleLogFlush(60000);
+        }
+    }
+
+    if (typeof window !== 'undefined') {
+        window.addEventListener('beforeunload', saveLogQueue);
+        setInterval(() => { if (logQueue.length) flushLogs(); }, 120000);
+    }
+
+    // Chiusura immediata: l'abilitazione e' stata tolta mentre l'editor era aperto
+    function lockDown(reason) {
+        if (!authInfo.ok) return;
+        const user = authInfo.user;
+        authInfo = { ok: false, user, reason, code: 401 };
+        clearAuthCache();
+        captured.clear();
+        pendingLog = [];
+        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
+        try { sdk.Events.off({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); } catch { /* ignora */ }
+        renderDenied(authInfo);
+    }
+
+    /* ------------------------------------------------------------------ */
     /* Bootstrap                                                           */
     /* ------------------------------------------------------------------ */
 
@@ -212,13 +581,36 @@
             await sdk.Events.once({ eventName: 'wme-ready' });
         }
         log(`avviato v${VERSION}`);
+        await buildTab();               // per ora il pannello mostra solo "verifica in corso"
+        loadLogQueue();
+
+        const r = await checkAuthorization(false);
+        authInfo = r;
+        if (!r.ok) { renderDenied(r); return; }   // niente cattura, niente dati, niente civici
+        const u = currentUser();
+        authInfo.rank = u.rank;
+        log(`utente ${r.user} autorizzato${r.ruolo ? ' (' + r.ruolo + ')' : ''}${r.offline ? ' - in tolleranza, foglio non raggiungibile' : ''}`);
+        startFeatures();
+    }
+
+    // Tutto cio' che lo script sa fare parte solo dopo l'OK del foglio autorizzazioni
+    function startFeatures() {
+        mountPanel();
         initComuniFromPack();
-        await buildTab();
         try { sdk.Events.on({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); }
         catch (e) { log('evento selezione KO', e); }
         registerShortcut();
+        initSaveTracking();
         loadIstat();
         loadCache();
+        logEvent('avvio_sessione', { esito: 'ok', motivo: authInfo.offline ? 'verifica non riuscita: avvio in tolleranza' : '' });
+        flushLogs();
+        // ricontrollo periodico: se i coordinatori tolgono l'utente, lo script si chiude da solo
+        setInterval(async () => {
+            if (!authInfo.ok) return;
+            const c = await checkAuthorization(true);
+            if (!c.ok) lockDown(c.reason);
+        }, AUTH_RECHECK_MIN * 60000);
     }
 
     // Scorciatoia (se l'SDK la supporta) per passare al volo tra ALT+clic / Sempre / Spenta
@@ -315,6 +707,9 @@
     const LOGO_SVG = logoSvg(18, 4);
 
     const CSS = `
+#wfit-panel .wfit-401 { border:1px solid #e2b4b4; background:#fdf3f3; border-radius:8px; }
+#wfit-panel .wfit-401code { font-weight:700; font-size:15px; color:#a5232f; letter-spacing:.5px; margin-bottom:6px; }
+#wfit-panel .wfit-401 p { margin:6px 0; }
 #wfit-panel { --wg:#009246; --ww:#f4f4f2; --wr:#ce2b37; --blu:#0b5ed7; --ink:#22262c; font-size:12px; color:var(--ink);
   container-type:inline-size; max-width:100%; overflow-x:hidden; padding:4px 10px 18px; }
 #wfit-panel, #wfit-panel * { box-sizing:border-box; }
@@ -649,10 +1044,17 @@
 
         const p = document.createElement('div');
         p.id = 'wfit-panel';
-        p.innerHTML = PANEL_HTML;
+        p.innerHTML = `
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-sec"><div class="wfit-muted">Verifica dell'abilitazione in corso&hellip;</div></div>`;
         tabPane.appendChild(p);
+        panelEl = p;
+    }
 
-        ui = collectUi(p);
+    // Il pannello vero e proprio: viene montato solo a verifica superata
+    function mountPanel() {
+        panelEl.innerHTML = PANEL_HTML;
+        ui = collectUi(panelEl);
         applySettingsToUi();
         wireUi();
     }
@@ -808,6 +1210,7 @@
         endBusy();
         readyStatus(regs);
         toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (rec.fileDate ? ` Dataset del ${rec.fileDate}.` : ''));
+        logEvent('dati', { esito: 'scaricato', motivo: `${regNome(reg)}: ${fmtN(rec.count)} civici, ${fmtN(rec.groups.length)} odonimi`, dataset: rec.fileDate || '' });
     }
 
     // Ciclo su piu' regioni: una alla volta, con barra complessiva e possibilita' di fermarsi.
@@ -2087,6 +2490,12 @@
     // Modifiche non salvate nell'editor (il WME vieta i civici su segmenti modificati)
     function unsavedCount() {
         try {
+            if (sdk.Editing && typeof sdk.Editing.getUnsavedChangesCount === 'function') {
+                const n = sdk.Editing.getUnsavedChangesCount();
+                if (typeof n === 'number') return n;
+            }
+        } catch { /* si prova col modello interno */ }
+        try {
             const W = WME();
             const am = W && W.model && W.model.actionManager;
             if (am) {
@@ -2564,23 +2973,25 @@
     }
 
     // Inserisce l'elenco confermato, tenendo da parte i rifiuti da "segmento proiettato"
-    async function insertHouseNumbers(list, addOne, existing, tally) {
+    async function insertHouseNumbers(list, addOne, existing, tally, rec) {
         const one = p => {
-            if (findExistingHN(existing, p.label, p.lon, p.lat)) { tally.dup++; return; }
-            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; return; }
+            if (findExistingHN(existing, p.label, p.lon, p.lat)) { tally.dup++; rec(p, 'gia_presente', 'civico gia\' su Waze'); return; }
+            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; rec(p, 'inserito', ''); return; }
             catch (e) {
                 const m = errText(e);
                 if (isProjectedError(m)) { tally.projFails.push(p); return; }
                 // alcune installazioni rifiutano la barra: si ritenta con "18B" al posto di "18/B"
                 if (p.label.includes('/') && /invalid|format|number/i.test(m)) {
-                    try { addOne(p.label.replace('/', ''), [p.lon, p.lat]); tally.ok++; return; }
+                    try { addOne(p.label.replace('/', ''), [p.lon, p.lat]); tally.ok++; rec(p, 'inserito', 'numero scritto senza barra'); return; }
                     catch (e2) {
                         const m2 = errText(e2);
-                        if (isProjectedError(m2)) tally.projFails.push(p); else bump(tally.reasons, niceReason(m2));
+                        if (isProjectedError(m2)) tally.projFails.push(p);
+                        else { bump(tally.reasons, niceReason(m2)); rec(p, 'errore', niceReason(m2)); }
                         return;
                     }
                 }
                 bump(tally.reasons, niceReason(m));
+                rec(p, 'errore', niceReason(m));
             }
         };
         let k = 0;
@@ -2593,7 +3004,7 @@
 
     // "projected segment" SENZA modifiche pendenti = segmento in stato transitorio
     // (post-salvataggio o aggancio a segmento nuovo/senza nome): ricarica la zona e ritenta una volta
-    async function retryProjectedFails(addOne, tally) {
+    async function retryProjectedFails(addOne, tally, rec) {
         const uns = unsavedCount();
         if (!((uns == null || uns === 0) && canPan())) return;
         status(`Il WME ha rifiutato ${tally.projFails.length} civici (segmento in transizione): ricarico la zona e ritento\u2026`);
@@ -2605,10 +3016,11 @@
         ];
         await panTo(mid);
         for (const p of retry) {
-            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; }
+            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; rec(p, 'inserito', 'riuscito al secondo tentativo'); }
             catch (e) {
                 const m = errText(e);
-                if (isProjectedError(m)) tally.projFails.push(p); else bump(tally.reasons, niceReason(m));
+                if (isProjectedError(m)) tally.projFails.push(p);
+                else { bump(tally.reasons, niceReason(m)); rec(p, 'errore', niceReason(m)); }
             }
         }
     }
@@ -2698,15 +3110,32 @@
             const existing = await loadExistingHNs();
             const addOne = makeHouseNumberAdder(HN);
             const tally = { ok: 0, dup: 0, reasons: {}, projFails: [] };
+            const rec = (p, esito, motivo) => logEvent('civico', {
+                esito,
+                motivo: motivo || '',
+                comune: r.comune || '',
+                localita: r.locality || '',
+                odonimo: toWazeCase(r.name),
+                civico: p.label,
+                lat: p.lat != null ? Number(p.lat.toFixed(7)) : '',
+                lon: p.lon != null ? Number(p.lon.toFixed(7)) : '',
+                distanza_m: p.d != null ? Math.round(p.d) : '',
+                dataset: r.fileDate || ''
+            });
 
-            await insertHouseNumbers(list, addOne, existing, tally);
-            if (tally.projFails.length) await retryProjectedFails(addOne, tally);
-            if (tally.projFails.length) diagnoseProjectedFails(tally.projFails, tally.reasons);
+            await insertHouseNumbers(list, addOne, existing, tally, rec);
+            if (tally.projFails.length) await retryProjectedFails(addOne, tally, rec);
+            if (tally.projFails.length) {
+                diagnoseProjectedFails(tally.projFails, tally.reasons);
+                for (const p of tally.projFails) rec(p, 'errore', 'rifiutato dal WME (segmento proiettato)');
+            }
 
             status('');
             const { msg, failed } = hnInsertSummary(tally, toWazeCase(r.name));
             toast(msg, failed ? 15000 : 8000);
+            aggiornaPendingUI();
             if (tally.ok) log(`house number inseriti con firma #${addOne.usedShape()}`);
+            flushLogs();
         } finally {
             endBusy();
         }
@@ -2988,9 +3417,20 @@
                 k++;
                 if (ids.length > 3) status(`Applico: ${k}/${ids.length}\u2026`);
                 if (k % 6 === 0) await tick();
+                const before = (() => { try { const st = segAddressState(id); return st.pn != null ? streetLabel(st.pn) : '(senza strada)'; } catch { return ''; } })();
+                const skippedBefore = tally.skipped;
                 const r = await tryApply(id);
                 if (r === 'notloaded') notLoaded.push(id);
                 else if (r !== 'ok') noteFail(id, r);
+                logEvent('segmento', {
+                    esito: r === 'ok' ? (tally.skipped > skippedBefore ? 'gia_a_posto' : 'modificato') : (r === 'notloaded' ? 'rimandato' : 'errore'),
+                    motivo: (r === 'ok' || r === 'notloaded') ? '' : r,
+                    comune: cityName || '',
+                    odonimo: streetName,
+                    segmento: String(id),
+                    prima: before,
+                    dopo: extra ? `${streetName} (PN citt\u00e0 Nessuno) + AN ${streetName}, ${cityName}` : `${streetName}, ${cityName}`
+                });
             }
             if (notLoaded.length) await retryOffscreenSegments(notLoaded, tryApply, noteFail);
             status('');
@@ -3005,6 +3445,8 @@
             }
             msg += tally.applied ? '. Rivedi le modifiche e salva.' : '.';
             toast(msg, failReasons.size ? 15000 : 8000);
+            aggiornaPendingUI();
+            flushLogs();
         } catch (e) {
             navigator.clipboard && navigator.clipboard.writeText(streetName);
             toast('Applicazione non riuscita (' + e.message + '). Nome copiato negli appunti.', 8000);
@@ -3096,6 +3538,29 @@
         }
         return null;
     }
+
+    // Diagnostica richiamabile dalla console del WME: wfitDiag()
+    try {
+        const w = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+        w.wfitDiag = () => {
+            const d = {
+                versione: VERSION,
+                utente: authInfo.user,
+                autorizzato: authInfo.ok,
+                urlConfigurato: gasConfigured(),
+                tokenConfigurato: !!gasToken() && !/^INCOLLA/i.test(gasToken()),
+                righeInAttesaDiSalvataggio: pendingLog.length,
+                righeInCodaDiInvio: logQueue.length,
+                modificheNonSalvate: unsavedCount(),
+                contatoreDisponibile: contatoreOk,
+                eventoSalvataggioVisto: saveEventSeen
+            };
+            console.table(d);
+            return d;
+        };
+        // forza l'invio subito, utile per capire se il foglio risponde
+        w.wfitInvia = () => { promuoviPending('invio forzato dall\'utente'); return flushLogs(); };
+    } catch { /* niente console */ }
 
     // Hook per test automatici fuori dal browser (in WME "module" non esiste: blocco inerte)
     if (typeof module !== 'undefined' && module.exports) {
