@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.1.0
+// @version      0.1.1
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -352,6 +352,45 @@
             else { renderDenied(r); }
         });
         log('accesso negato:', info.reason);
+    }
+
+    /* ------------------- permalink e segmento di un punto ------------------- */
+
+    // Ambiente dell'editor (row / usa / il): si legge dall'indirizzo, non si indovina
+    function wmeEnv() {
+        try { return new URL(location.href).searchParams.get('env') || 'row'; }
+        catch { return 'row'; }
+    }
+
+    // Permalink nella forma usata dal WME, con il segmento gia' selezionato:
+    // https://www.waze.com/it/editor?env=row&lat=..&lon=..&zoomLevel=19&segments=..
+    function permalink(lon, lat, segId, zoom = 19) {
+        if (lon == null || lat == null) return '';
+        try {
+            const base = location.origin + location.pathname.replace(/\/+$/, '');
+            let u = `${base}?env=${wmeEnv()}&lat=${Number(lat).toFixed(5)}&lon=${Number(lon).toFixed(5)}&zoomLevel=${zoom}`;
+            if (segId != null && segId !== '') u += `&segments=${segId}`;
+            return u;
+        } catch { return ''; }
+    }
+
+    // Segmenti candidati per capire a quale strada e' finito un civico: prima quelli
+    // caricati nell'editor, in mancanza quelli che hai in lista. Si calcola una volta
+    // per lotto, non a ogni civico.
+    let segsPerLog = null;
+    function resetSegsPerLog() { segsPerLog = null; }
+    function segmentoDelPunto(lon, lat) {
+        try {
+            if (!segsPerLog) {
+                segsPerLog = loadedSegmentGeometries();
+                if (!segsPerLog || !segsPerLog.length) {
+                    segsPerLog = [...captured.entries()]
+                        .filter(([, v]) => v && v.coords && v.coords.length > 1)
+                        .map(([id, v]) => ({ id, c: v.coords }));
+                }
+            }
+            return nearestLoadedSegment(segsPerLog, lon, lat);
+        } catch { return null; }
     }
 
     /* ---------------------------- coda dei log ---------------------------- */
@@ -3110,18 +3149,24 @@
             const existing = await loadExistingHNs();
             const addOne = makeHouseNumberAdder(HN);
             const tally = { ok: 0, dup: 0, reasons: {}, projFails: [] };
-            const rec = (p, esito, motivo) => logEvent('civico', {
-                esito,
-                motivo: motivo || '',
-                comune: r.comune || '',
-                localita: r.locality || '',
-                odonimo: toWazeCase(r.name),
-                civico: p.label,
-                lat: p.lat != null ? Number(p.lat.toFixed(7)) : '',
-                lon: p.lon != null ? Number(p.lon.toFixed(7)) : '',
-                distanza_m: p.d != null ? Math.round(p.d) : '',
-                dataset: r.fileDate || ''
-            });
+            resetSegsPerLog();
+            const rec = (p, esito, motivo) => {
+                const segId = segmentoDelPunto(p.lon, p.lat);
+                logEvent('civico', {
+                    esito,
+                    motivo: motivo || '',
+                    comune: r.comune || '',
+                    localita: r.locality || '',
+                    odonimo: toWazeCase(r.name),
+                    civico: p.label,
+                    segmento: segId != null ? String(segId) : '',
+                    permalink: permalink(p.lon, p.lat, segId),
+                    lat: p.lat != null ? Number(p.lat.toFixed(7)) : '',
+                    lon: p.lon != null ? Number(p.lon.toFixed(7)) : '',
+                    distanza_m: p.d != null ? Math.round(p.d) : '',
+                    dataset: r.fileDate || ''
+                });
+            };
 
             await insertHouseNumbers(list, addOne, existing, tally, rec);
             if (tally.projFails.length) await retryProjectedFails(addOne, tally, rec);
@@ -3422,12 +3467,19 @@
                 const r = await tryApply(id);
                 if (r === 'notloaded') notLoaded.push(id);
                 else if (r !== 'ok') noteFail(id, r);
+                const mid = (() => {
+                    const c = (captured.get(id) && captured.get(id).coords) || segGeometry(id);
+                    return c && c.length ? lineMidpoint(c) : null;
+                })();
                 logEvent('segmento', {
                     esito: r === 'ok' ? (tally.skipped > skippedBefore ? 'gia_a_posto' : 'modificato') : (r === 'notloaded' ? 'rimandato' : 'errore'),
                     motivo: (r === 'ok' || r === 'notloaded') ? '' : r,
                     comune: cityName || '',
                     odonimo: streetName,
                     segmento: String(id),
+                    permalink: mid ? permalink(mid[0], mid[1], id, 17) : permalink(null, null, id),
+                    lat: mid ? Number(mid[1].toFixed(7)) : '',
+                    lon: mid ? Number(mid[0].toFixed(7)) : '',
                     prima: before,
                     dopo: extra ? `${streetName} (PN citt\u00e0 Nessuno) + AN ${streetName}, ${cityName}` : `${streetName}, ${cityName}`
                 });
