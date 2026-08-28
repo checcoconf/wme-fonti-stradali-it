@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.0.10.b
+// @version      0.0.11
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -43,6 +43,7 @@
     const VERSION = (typeof GM_info !== 'undefined' && GM_info.script) ? GM_info.script.version : 'dev';
     const STORE_KEY = 'wmeFontiIT_v3';
     const GRID_CELL = 0.004; // ~440 m in latitudine
+    const BYTES_PER_CIVICO = 16; // lon(4) + lat(4) + gid(4) + civico(2) + esponente(2)
     const STALE_DAYS = 35; // ANNCSU aggiorna i dataset regionali con cadenza mensile: oltre questa soglia, avviso (mai scarico automatico)
     const ANNCSU_DL = 'https://anncsu.open.agenziaentrate.gov.it/age-inspire/opendata/anncsu/getds.php?INDIR_';
     const ISTAT_COMUNI = 'https://www.istat.it/storage/codici-unita-amministrative/Elenco-comuni-italiani.csv';
@@ -88,29 +89,72 @@
     let batchRunning = false;         // ciclo su piu' regioni in corso
     let abortBatch = false;           // richiesta di fermarsi dopo la regione in corso
 
-    const settings = Object.assign(
-        { raggio: 150, titleCase: true, captureMode: 'alt', applyMode: 'extra', autoAnalyze: true, showDots: true, hlColor: '#00e5ff', nameRules: [], captureKey: null },
-        (() => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) { return {}; } })()
-    );
-    if (!Array.isArray(settings.nameRules)) settings.nameRules = [];
-    if (!/^#[0-9a-f]{6}$/i.test(settings.hlColor || '')) settings.hlColor = '#00e5ff';
-    if (!settings.captureMode) settings.captureMode = (settings.capture === false) ? 'off' : 'alt'; // migrazione dalla vecchia spunta
-    // MAIUSC e CTRL da soli sono stati tolti: il WME li usa per la multi-selezione dei segmenti.
-    // Chi li aveva scelti passa alla combinazione equivalente ma libera.
-    if (settings.captureMode === 'shift') settings.captureMode = 'altshift';
-    if (settings.captureMode === 'ctrl') settings.captureMode = 'ctrlalt';
-    // Tasto personalizzato: se il salvataggio e' rovinato o mancante si torna ad ALT (default di sempre)
-    if (settings.captureKey && typeof settings.captureKey !== 'object') settings.captureKey = null;
-    // porta al formato "combinazione" anche i tasti salvati dalla versione precedente (un tasto solo)
-    settings.captureKey = normKeyChoice(settings.captureKey);
-    if (settings.captureMode === 'custom' && !settings.captureKey) settings.captureMode = 'alt';
-    if (!settings.applyMode) settings.applyMode = 'extra';
-    // come trattare i civici in forma numero/numero (20/1, 20/2): 'nonins' (predefinito: restano
-    // in lista ma non vengono inseriti), 'includi' (civici normali), 'escludi' (fuori dalla lista)
-    if (settings.suspMode === 'blocca') settings.suspMode = 'nonins';     // migrazione
-    if (settings.suspMode === 'nascondi') settings.suspMode = 'escludi';  // migrazione
-    if (!['nonins', 'includi', 'escludi'].includes(settings.suspMode)) settings.suspMode = 'nonins';
-    const saveSettings = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* ignora */ } };
+    /* ------------------------------------------------------------------ */
+    /* Utilita' di base                                                    */
+    /* ------------------------------------------------------------------ */
+
+    // Il WME legacy vive su window.W (unsafeWindow sotto Tampermonkey): si legge una volta sola.
+    const WME = () => (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).W;
+    const WREQ = () => {
+        const w = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+        return typeof w.require === 'function' ? w.require : (typeof require === 'function' ? require : null);
+    };
+
+    // Prima funzione che restituisce qualcosa di utile, saltando quelle che esplodono.
+    // E' il modo in cui lo script prova l'SDK e poi ripiega sul modello legacy del WME.
+    function firstOk(...fns) {
+        for (const fn of fns) {
+            try { const r = fn(); if (r != null && r !== false) return r; } catch { /* prossima */ }
+        }
+        return null;
+    }
+
+    // Codici dei tasti modificatori: non sono ammessi come tasto di cattura personalizzato.
+    // Sta qui in alto perche' normKeyChoice() la usa gia' durante la lettura delle impostazioni.
+    const MOD_CODES = /^(Alt|Shift|Control|Meta|OS)(Left|Right)?$/;
+
+    // Plurale italiano: pl(1,'civico','civici') -> 'civico'
+    const pl = (n, uno, molti) => (n === 1 ? uno : molti);
+    // Conteggio per motivo, usato nei riepiloghi di fine operazione
+    const bump = (obj, key, n = 1) => { obj[key] = (obj[key] || 0) + n; };
+    const tick = () => new Promise(r => setTimeout(r, 0));
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    /* ------------------------------------------------------------------ */
+    /* Impostazioni                                                        */
+    /* ------------------------------------------------------------------ */
+
+    const DEFAULT_SETTINGS = {
+        raggio: 150, titleCase: true, captureMode: 'alt', applyMode: 'extra',
+        autoAnalyze: true, showDots: true, hlColor: '#00e5ff', captureKey: null
+    };
+
+    // Riporta al formato attuale le impostazioni salvate dalle versioni precedenti e
+    // ripara i valori rovinati: qui dentro sta TUTTA la retrocompatibilita'.
+    function migrateSettings(s) {
+        if (!Array.isArray(s.nameRules)) s.nameRules = [];
+        if (!/^#[0-9a-f]{6}$/i.test(s.hlColor || '')) s.hlColor = '#00e5ff';
+        // MAIUSC e CTRL da soli erano scegliabili fino alla 0.0.5.b, poi sono stati tolti perche'
+        // il WME li usa per la multi-selezione: chi li aveva salvati passa alla combinazione libera.
+        if (s.captureMode === 'shift') s.captureMode = 'altshift';
+        if (s.captureMode === 'ctrl') s.captureMode = 'ctrlalt';
+        // Tasto personalizzato: se il salvataggio e' rovinato o mancante si torna ad ALT (default di sempre)
+        if (s.captureKey && typeof s.captureKey !== 'object') s.captureKey = null;
+        // porta al formato attuale anche i tasti salvati dalla versione precedente (un tasto solo)
+        s.captureKey = normKeyChoice(s.captureKey);
+        if (s.captureMode === 'custom' && !s.captureKey) s.captureMode = 'alt';
+        if (!s.applyMode) s.applyMode = 'extra';
+        // come trattare i civici in forma numero/numero (20/1, 20/2): 'nonins' (predefinito: restano
+        // in lista ma non vengono inseriti), 'includi' (civici normali), 'escludi' (fuori dalla lista)
+        if (!['nonins', 'includi', 'escludi'].includes(s.suspMode)) s.suspMode = 'nonins';
+        return s;
+    }
+
+    const settings = migrateSettings(Object.assign(
+        {}, DEFAULT_SETTINGS,
+        (() => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch { return {}; } })()
+    ));
+    const saveSettings = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch { /* ignora */ } };
     const log = (...a) => console.log(`${SCRIPT_NAME}:`, ...a);
 
     /* ------------------------------------------------------------------ */
@@ -133,45 +177,21 @@
         }
         return dbPromise;
     }
+    // Una sola transazione generica: le operazioni cambiano solo per la richiesta interna
+    async function idbTx(store, mode, run) {
+        const d = await db();
+        return new Promise((res, rej) => {
+            const t = d.transaction(store, mode);
+            const q = run(t.objectStore(store));
+            t.oncomplete = () => res(q ? q.result : undefined);
+            t.onerror = () => rej(t.error);
+        });
+    }
     const idb = {
-        put: async (store, val) => {
-            const d = await db();
-            return new Promise((res, rej) => {
-                const t = d.transaction(store, 'readwrite');
-                t.objectStore(store).put(val);
-                t.oncomplete = res; t.onerror = () => rej(t.error);
-            });
-        },
-        get: async (store, key) => {
-            const d = await db();
-            return new Promise((res, rej) => {
-                const q = d.transaction(store, 'readonly').objectStore(store).get(key);
-                q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
-            });
-        },
-        all: async store => {
-            const d = await db();
-            return new Promise((res, rej) => {
-                const q = d.transaction(store, 'readonly').objectStore(store).getAll();
-                q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error);
-            });
-        },
-        del: async (store, key) => {
-            const d = await db();
-            return new Promise((res, rej) => {
-                const t = d.transaction(store, 'readwrite');
-                t.objectStore(store).delete(key);
-                t.oncomplete = res; t.onerror = () => rej(t.error);
-            });
-        },
-        clear: async store => {
-            const d = await db();
-            return new Promise((res, rej) => {
-                const t = d.transaction(store, 'readwrite');
-                t.objectStore(store).clear();
-                t.oncomplete = res; t.onerror = () => rej(t.error);
-            });
-        }
+        put: (store, val) => idbTx(store, 'readwrite', o => { o.put(val); }),
+        get: (store, key) => idbTx(store, 'readonly', o => o.get(key)),
+        all: async store => (await idbTx(store, 'readonly', o => o.getAll())) || [],
+        clear: store => idbTx(store, 'readwrite', o => { o.clear(); })
     };
 
     /* ------------------------------------------------------------------ */
@@ -216,7 +236,7 @@
             () => sdk.Shortcuts.createShortcut({ shortcutId: 'wfit-capture-mode', description: 'Fonti IT: cambia modalit\u00e0 cattura', shortcutKeys: 'A+c', callback: cycle }),
             () => sdk.Shortcuts.createShortcut({ shortcutId: 'wfit-capture-mode', description: 'Fonti IT: cambia modalit\u00e0 cattura', shortcutKeys: null, callback: cycle })
         ];
-        for (const t of tries) { try { t(); log('scorciatoia registrata'); return; } catch (e) { /* prossima */ } }
+        for (const t of tries) { try { t(); log('scorciatoia registrata'); return; } catch { /* prossima */ } }
         log('scorciatoie SDK non disponibili');
     }
 
@@ -421,18 +441,9 @@
 }
 `;
 
-    async function buildTab() {
-        const { tabLabel, tabPane } = await sdk.Sidebar.registerScriptTab();
-        tabLabel.innerHTML = `${LOGO_SVG} <span>Fonti IT</span>`;
-        tabLabel.title = SCRIPT_NAME;
-
-        const style = document.createElement('style');
-        style.textContent = CSS;
-        document.head.appendChild(style);
-
-        const p = document.createElement('div');
-        p.id = 'wfit-panel';
-        p.innerHTML = `
+    // Struttura del pannello: blocco di sola presentazione, tenuto fuori da buildTab,
+    // che si occupa invece di montarlo e collegarlo.
+    const PANEL_HTML = `
   <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
 
   <div class="wfit-sec">
@@ -525,38 +536,42 @@
 
   <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; a cura di <b>${AUTORE}</b> &middot; dati: ${anncsuLink()} (Istat / Agenzia delle Entrate), open data con licenza ${licLink()} &middot; info: Slack ${slackLink()}.</div>
   <div class="wfit-toast" id="wfit-toast"></div>`;
-        tabPane.appendChild(p);
 
-        ui = {
-            regione: p.querySelector('#wfit-regione'),
-            scarica: p.querySelector('#wfit-scarica'),
-            scaricaTutte: p.querySelector('#wfit-scarica-tutte'),
-            aggiorna: p.querySelector('#wfit-aggiorna'),
-            prog: p.querySelector('#wfit-prog'),
-            datastatus: p.querySelector('#wfit-datastatus'),
-            svuotaCache: p.querySelector('#wfit-svuota-cache'),
-            capmode: p.querySelector('#wfit-capmode'),
-            keyrow: p.querySelector('#wfit-keyrow'),
-            keyshow: p.querySelector('#wfit-keyshow'),
-            keyset: p.querySelector('#wfit-keyset'),
-            keyok: p.querySelector('#wfit-keyok'),
-            keyredo: p.querySelector('#wfit-keyredo'),
-            keyclr: p.querySelector('#wfit-keyclr'),
-            hlcolor: p.querySelector('#wfit-hlcolor'),
-            selinfo: p.querySelector('#wfit-selinfo'),
-            addSel: p.querySelector('#wfit-add-sel'),
-            clearCap: p.querySelector('#wfit-clear-cap'),
-            raggio: p.querySelector('#wfit-raggio'),
-            titlecase: p.querySelector('#wfit-titlecase'),
-            autoan: p.querySelector('#wfit-autoan'),
-            dots: p.querySelector('#wfit-dots'),
-            amExtra: p.querySelector('#wfit-am-extra'),
-            amUrb: p.querySelector('#wfit-am-urb'),
-            analizza: p.querySelector('#wfit-analizza'),
-            results: p.querySelector('#wfit-results'),
-            toast: p.querySelector('#wfit-toast')
+    // Raccoglie in un solo posto i riferimenti agli elementi interattivi del pannello
+    function collectUi(p) {
+        return {
+                regione: p.querySelector('#wfit-regione'),
+                scarica: p.querySelector('#wfit-scarica'),
+                scaricaTutte: p.querySelector('#wfit-scarica-tutte'),
+                aggiorna: p.querySelector('#wfit-aggiorna'),
+                prog: p.querySelector('#wfit-prog'),
+                datastatus: p.querySelector('#wfit-datastatus'),
+                svuotaCache: p.querySelector('#wfit-svuota-cache'),
+                capmode: p.querySelector('#wfit-capmode'),
+                keyrow: p.querySelector('#wfit-keyrow'),
+                keyshow: p.querySelector('#wfit-keyshow'),
+                keyset: p.querySelector('#wfit-keyset'),
+                keyok: p.querySelector('#wfit-keyok'),
+                keyredo: p.querySelector('#wfit-keyredo'),
+                keyclr: p.querySelector('#wfit-keyclr'),
+                hlcolor: p.querySelector('#wfit-hlcolor'),
+                selinfo: p.querySelector('#wfit-selinfo'),
+                addSel: p.querySelector('#wfit-add-sel'),
+                clearCap: p.querySelector('#wfit-clear-cap'),
+                raggio: p.querySelector('#wfit-raggio'),
+                titlecase: p.querySelector('#wfit-titlecase'),
+                autoan: p.querySelector('#wfit-autoan'),
+                dots: p.querySelector('#wfit-dots'),
+                amExtra: p.querySelector('#wfit-am-extra'),
+                amUrb: p.querySelector('#wfit-am-urb'),
+                analizza: p.querySelector('#wfit-analizza'),
+                results: p.querySelector('#wfit-results'),
+                toast: p.querySelector('#wfit-toast')
         };
+    }
 
+    // Porta nel pannello i valori salvati nelle impostazioni
+    function applySettingsToUi() {
         ui.raggio.value = settings.raggio;
         ui.titlecase.checked = settings.titleCase;
         ui.capmode.value = settings.captureMode;
@@ -567,6 +582,10 @@
         (settings.applyMode === 'urb' ? ui.amUrb : ui.amExtra).checked = true;
         if (settings.reg) ui.regione.value = settings.reg;
 
+    }
+
+    // Collega ogni comando del pannello alla sua azione
+    function wireUi() {
         ui.regione.addEventListener('change', () => { settings.reg = ui.regione.value; saveSettings(); });
         ui.raggio.addEventListener('change', () => { settings.raggio = Math.min(2000, Math.max(1, parseInt(ui.raggio.value, 10) || 150)); saveSettings(); });
         ui.titlecase.addEventListener('change', () => { settings.titleCase = ui.titlecase.checked; saveSettings(); renderResults(lastResults); });
@@ -603,9 +622,11 @@
         });
         ui.amExtra.addEventListener('change', () => { if (ui.amExtra.checked) { settings.applyMode = 'extra'; saveSettings(); } });
         ui.amUrb.addEventListener('change', () => { if (ui.amUrb.checked) { settings.applyMode = 'urb'; saveSettings(); } });
-        ui.scarica.addEventListener('click', () => downloadRegion(ui.regione.value).catch(e => { toast('Errore: ' + e.message, 8000); endBusy(); }));
-        ui.scaricaTutte.addEventListener('click', () => downloadAllRegions().catch(e => { toast('Errore: ' + e.message, 8000); endBusy(); }));
-        ui.aggiorna.addEventListener('click', () => refreshDownloadedRegions().catch(e => { toast('Errore: ' + e.message, 8000); endBusy(); }));
+        // ogni operazione sui dati fallisce allo stesso modo: messaggio + bottoni riabilitati
+        const onDataError = e => { toast('Errore: ' + e.message, 8000); endBusy(); };
+        ui.scarica.addEventListener('click', () => downloadRegion(ui.regione.value).catch(onDataError));
+        ui.scaricaTutte.addEventListener('click', () => downloadAllRegions().catch(onDataError));
+        ui.aggiorna.addEventListener('click', () => refreshDownloadedRegions().catch(onDataError));
         ui.svuotaCache.addEventListener('click', async () => {
             await idb.clear('regioni');
             rebuildMemory([]);
@@ -615,6 +636,25 @@
         ui.addSel.addEventListener('click', () => captureIds(getSelectedSegmentIds(), false));
         ui.clearCap.addEventListener('click', () => { captured.clear(); lastFailedIds.clear(); updateCapturedUI(); clearResultsUI(); });
         ui.analizza.addEventListener('click', analyze);
+    }
+
+    async function buildTab() {
+        const { tabLabel, tabPane } = await sdk.Sidebar.registerScriptTab();
+        tabLabel.innerHTML = `${LOGO_SVG} <span>Fonti IT</span>`;
+        tabLabel.title = SCRIPT_NAME;
+
+        const style = document.createElement('style');
+        style.textContent = CSS;
+        document.head.appendChild(style);
+
+        const p = document.createElement('div');
+        p.id = 'wfit-panel';
+        p.innerHTML = PANEL_HTML;
+        tabPane.appendChild(p);
+
+        ui = collectUi(p);
+        applySettingsToUi();
+        wireUi();
     }
 
     function toast(msg, ms = 4000) {
@@ -659,7 +699,7 @@
             if (r.fileDate) bits.push(`dataset del ${r.fileDate}`);
             if (r.quando) {
                 const giorni = Math.floor((Date.now() - r.quando) / 86400000);
-                const txt = `scaricata ${giorni} giorn${giorni === 1 ? 'o' : 'i'} fa`;
+                const txt = `scaricata ${giorni} ${pl(giorni, 'giorno', 'giorni')} fa`;
                 bits.push(giorni > STALE_DAYS ? `<b style="color:#b36b00">${txt}</b>` : txt);
             }
             if (!bits.length) return r.nomeReg || r.reg;
@@ -736,7 +776,7 @@
                 fileName = findZipEntry(u8peek).name;
                 fileDate = extractDateFromFilename(fileName);
             }
-        } catch (e) { /* niente data, non e' bloccante */ }
+        } catch { /* niente data, non e' bloccante */ }
         log('file dentro lo zip:', fileName, '\u00b7 data riconosciuta:', fileDate || '(pattern non riconosciuto)');
 
         const rec = await parseIndirToRecord(new Uint8Array(buf), reg, nome,
@@ -749,7 +789,7 @@
 
     function readyStatus(regs) {
         markUpdateDue(regs);
-        const mb = (mem.n * 14 / 1048576).toFixed(0);
+        const mb = (mem.n * BYTES_PER_CIVICO / 1048576).toFixed(0);
         status(`Pronto: <b>${fmtN(mem.n)}</b> civici in memoria (~${mb} MB, ${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsDateLabel(regs)} Cache locale: al prossimo avvio &egrave; gi&agrave; tutto caricato.`);
     }
 
@@ -800,8 +840,8 @@
         endBusy();
         readyStatus(regs);
         let msg = fermato ? 'Fermato dall\'utente. ' : '';
-        msg += `${ok.length} region${ok.length === 1 ? 'e' : 'i'} a posto`;
-        if (ko.length) msg += `, ${ko.length} non riuscit${ko.length === 1 ? 'a' : 'e'}: ${ko.join(', ')} (riprova singolarmente)`;
+        msg += `${ok.length} ${pl(ok.length, 'regione', 'regioni')} a posto`;
+        if (ko.length) msg += `, ${ko.length} ${pl(ko.length, 'non riuscita', 'non riuscite')}: ${ko.join(', ')} (riprova singolarmente)`;
         toast(msg + '.', ko.length ? 12000 : 7000);
     }
 
@@ -853,30 +893,39 @@
         };
     }
 
+    // Dizionario compatto testo -> indice (l'indice 0 e' sempre la stringa vuota).
+    // Serve sia in fase di parsing sia quando si fondono piu' regioni in memoria.
+    function interner(limit) {
+        const list = [''];
+        const map = new Map([['', 0]]);
+        return {
+            list,
+            index(v) {
+                if (!v) return 0;
+                let i = map.get(v);
+                if (i === undefined) {
+                    // con gli esponenti numerici (20/1 ... 20/240) una regione supera facilmente i 255
+                    // valori distinti: oltre il tetto l'esponente si perdeva e il civico diventava nudo
+                    if (list.length >= limit) return 0;
+                    i = list.length; list.push(v); map.set(v, i);
+                }
+                return i;
+            }
+        };
+    }
+
     async function parseIndirToRecord(u8, reg, nomeReg, onProgress) {
         const lons = growBuf(Float32Array), lats = growBuf(Float32Array),
             gids = growBuf(Uint32Array), civn = growBuf(Uint16Array), cive = growBuf(Uint16Array);
         const groups = [];
         const gmap = new Map();
-        const esps = [''];               // dizionario esponenti: indice 0 = nessuno
-        const emap = new Map([['', 0]]);
+        const espDict = interner(65535);  // dizionario esponenti: indice 0 = nessuno
+        const esps = espDict.list;
         let mapping = null, read = 0, diag = '', firstLine = true;
         // controllo di sanita' sulla colonna esponente: se quasi tutti i civici ne hanno uno,
         // quasi certamente stiamo leggendo la colonna sbagliata (un progressivo, un codice) e
         // ogni civico si ritroverebbe un "/n" che nella realta' non esiste
         let withEsp = 0; const espTally = new Map(); let mapSource = '?';
-
-        const espIndex = s => {
-            if (!s) return 0;
-            let i = emap.get(s);
-            if (i === undefined) {
-                // con gli esponenti numerici (20/1 … 20/240) una regione supera facilmente i 255
-                // valori distinti: oltre il tetto l'esponente si perdeva e il civico diventava nudo
-                if (esps.length >= 65535) return 0;
-                i = esps.length; esps.push(s); emap.set(s, i);
-            }
-            return i;
-        };
 
         const handleLine = line => {
             if (!line || line.length < 5) return;
@@ -915,7 +964,7 @@
             }
             if (!es && mapping.esp >= 0) es = (f[mapping.esp] || '').trim().toUpperCase();
             civn.push(nc);
-            cive.push(espIndex(es));
+            cive.push(espDict.index(es));
             if (es) { withEsp++; espTally.set(es, (espTally.get(es) || 0) + 1); }
         };
 
@@ -949,19 +998,33 @@
         };
     }
 
-    async function plainCsvLines(u8, onLine, onProgress) {
+    // Spezza in righe un flusso di testo che arriva a pezzi, tenendo da parte la riga
+    // a cavallo fra un pezzo e il successivo. La usano sia il CSV nudo sia lo ZIP.
+    function lineFeeder(onLine) {
         const dec = new TextDecoder('utf-8');
-        let carry = '', done = 0;
+        let carry = '';
+        return {
+            feed(chunk, last) {
+                const lines = (carry + dec.decode(chunk, { stream: !last })).split(/\r?\n/);
+                carry = lines.pop();
+                for (const l of lines) onLine(l);
+            },
+            end() {
+                carry += dec.decode();
+                if (carry) for (const l of carry.split(/\r?\n/)) onLine(l);
+                carry = '';
+            }
+        };
+    }
+
+    async function plainCsvLines(u8, onLine, onProgress) {
+        const feeder = lineFeeder(onLine);
         const STEP = 8 * 1024 * 1024;
         for (let off = 0; off < u8.length; off += STEP) {
             const last = off + STEP >= u8.length;
-            const txt = carry + dec.decode(u8.subarray(off, off + STEP), { stream: !last });
-            const lines = txt.split(/\r?\n/);
-            carry = last ? '' : lines.pop();
-            for (const l of lines) onLine(l);
-            if (last && carry) onLine(carry);
-            done = Math.min(u8.length, off + STEP);
-            onProgress && onProgress(done / u8.length);
+            feeder.feed(u8.subarray(off, off + STEP), last);
+            if (last) feeder.end();
+            onProgress && onProgress(Math.min(u8.length, off + STEP) / u8.length);
             await tick();
         }
     }
@@ -1041,23 +1104,17 @@
             await writer.close();
         })();
 
-        const dec = new TextDecoder('utf-8');
-        let carry = '', chunks = 0;
+        const feeder = lineFeeder(onLine);
+        let chunks = 0;
         for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            const txt = carry + dec.decode(value, { stream: true });
-            const lines = txt.split(/\r?\n/);
-            carry = lines.pop();
-            for (const l of lines) onLine(l);
+            feeder.feed(value, false);
             if ((++chunks & 15) === 0) await tick();
         }
-        carry += dec.decode();
-        if (carry) for (const l of carry.split(/\r?\n/)) onLine(l);
+        feeder.end();
         await feeding;
     }
-
-    const tick = () => new Promise(r => setTimeout(r, 0));
 
     /* ------------------------------------------------------------------ */
     /* Parsing riga ANNCSU                                                 */
@@ -1144,8 +1201,8 @@
         const civn = new Uint16Array(total);
         const cive = new Uint16Array(total);
         const groups = [];
-        const esps = [''];
-        const emap = new Map([['', 0]]);
+        const espDict = interner(65535);
+        const esps = espDict.list;
         let base = 0;
         for (const r of regionRecords) {
             const gOff = groups.length;
@@ -1156,11 +1213,7 @@
             // rimappa gli esponenti locali del record sul dizionario globale
             let emapLocal = null;
             if (r.cive && r.esps) {
-                emapLocal = r.esps.map(s => {
-                    let i = emap.get(s);
-                    if (i === undefined) { i = esps.length; esps.push(s); emap.set(s, i); }
-                    return i;
-                });
+                emapLocal = r.esps.map(v => espDict.index(v));
                 const rc = new Uint16Array(r.cive);
                 for (let i = 0; i < rc.length; i++) cive[base + i] = emapLocal[rc[i]] || 0;
             }
@@ -1183,15 +1236,17 @@
         if (!a) { a = []; grid.set(k, a); }
         a.push(idx);
     }
-    function gridQueryBBox(minLon, minLat, maxLon, maxLat) {
-        const out = [];
+    // Scorre gli indici dei civici che cadono nel riquadro, cella per cella.
+    // A callback invece che con un array: su una citta' densa l'elenco dei candidati e'
+    // enorme e "out.push(...a)" era sia lento sia a rischio di stack overflow.
+    function gridForEachInBBox(minLon, minLat, maxLon, maxLat, cb) {
         const x0 = Math.floor(minLon / GRID_CELL), x1 = Math.floor(maxLon / GRID_CELL);
         const y0 = Math.floor(minLat / GRID_CELL), y1 = Math.floor(maxLat / GRID_CELL);
         for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
             const a = grid.get(x + '_' + y);
-            if (a) out.push(...a);
+            if (!a) continue;
+            for (let k = 0; k < a.length; k++) cb(a[k]);
         }
-        return out;
     }
 
     /* ------------------------------------------------------------------ */
@@ -1216,27 +1271,35 @@
     /* ------------------------------------------------------------------ */
 
     function getSelectedSegmentIds() {
-        try {
-            const sel = sdk.Editing.getSelection();
-            if (sel && sel.objectType === 'segment' && sel.ids && sel.ids.length) return sel.ids.slice();
-        } catch (e) { /* fallback */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            if (W && W.selectionManager) {
+        return firstOk(
+            () => {
+                const sel = sdk.Editing.getSelection();
+                return (sel && sel.objectType === 'segment' && sel.ids && sel.ids.length) ? sel.ids.slice() : null;
+            },
+            () => {
+                const W = WME();
+                if (!W || !W.selectionManager) return null;
                 return W.selectionManager.getSelectedDataModelObjects()
                     .filter(o => o.type === 'segment').map(o => o.getID());
             }
-        } catch (e) { /* niente */ }
-        return [];
+        ) || [];
     }
 
     function clearWmeSelection() {
-        try { if (typeof sdk.Editing.clearSelection === 'function') { sdk.Editing.clearSelection(); return; } } catch (e) { /* oltre */ }
-        try { if (typeof sdk.Editing.setSelection === 'function') { sdk.Editing.setSelection({ selection: { ids: [], objectType: 'segment' } }); return; } } catch (e) { /* oltre */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            if (W && W.selectionManager && W.selectionManager.unselectAll) W.selectionManager.unselectAll();
-        } catch (e) { /* pazienza */ }
+        firstOk(
+            () => { if (typeof sdk.Editing.clearSelection !== 'function') return null; sdk.Editing.clearSelection(); return true; },
+            () => {
+                if (typeof sdk.Editing.setSelection !== 'function') return null;
+                sdk.Editing.setSelection({ selection: { ids: [], objectType: 'segment' } });
+                return true;
+            },
+            () => {
+                const W = WME();
+                if (!W || !W.selectionManager || !W.selectionManager.unselectAll) return null;
+                W.selectionManager.unselectAll();
+                return true;
+            }
+        );
     }
 
     // Combinazioni di modificatori delle modalita' fisse. Sono scelte apposta fra quelle che il WME
@@ -1272,16 +1335,12 @@
     let listenArmed = false;          // true dopo il clic sul badge: solo allora si legge la tastiera
     let pendingKey = null;            // tasto letto ma non ancora confermato dall'editor
 
-    const MOD_CODES = /^(Alt|Shift|Control|Meta|OS)(Left|Right)?$/;
-
-    // Accetta sia il formato vecchio { code, name } sia quello a combinazione { codes[], names[] }
-    // e riduce tutto a UN solo tasto: { code, name }
+    // Ripulisce il tasto salvato: deve essere UN tasto solo, mai un modificatore.
     function normKeyChoice(k) {
         if (!k || typeof k !== 'object') return null;
-        const code = k.code || (Array.isArray(k.codes) ? k.codes[0] : null);
+        const code = k.code;
         if (!code || MOD_CODES.test(code)) return null;
-        const name = k.name || (Array.isArray(k.names) ? k.names[0] : '') || codeName(code, '');
-        return { code, name };
+        return { code, name: k.name || codeName(code, '') };
     }
 
     // Etichetta leggibile del tasto: "Q", "F2", "SPAZIO"...
@@ -1516,7 +1575,7 @@
         }
         const ids = [...captured.keys()];
         const MAXCHIP = 30;
-        let html = `<b>${ids.length}</b> segment${ids.length === 1 ? 'o' : 'i'} in lista &middot; `;
+        let html = `<b>${ids.length}</b> ${pl(ids.length, 'segmento', 'segmenti')} in lista &middot; `;
         html += ids.slice(0, MAXCHIP).map(id =>
             `<span class="wfit-chip${lastFailedIds.has(id) ? ' wfit-bad' : ''}" data-id="${id}" title="clic: mostra nell'editor${lastFailedIds.has(id) ? ' (ultimo Applica fallito qui)' : ''}">${String(id).slice(-5)}<b class="wfit-x" data-id="${id}" title="togli dalla lista">&times;</b></span>`
         ).join('');
@@ -1534,7 +1593,7 @@
             const id = coerceId(ch.dataset.id);
             suppressUntil = Date.now() + 800; // il clic sul chip non deve ri-catturare
             try { sdk.Editing.setSelection({ selection: { ids: [id], objectType: 'segment' } }); }
-            catch (e) { toast('Selezione via SDK non disponibile.'); }
+            catch { toast('Selezione via SDK non disponibile.'); }
         }));
     }
 
@@ -1543,7 +1602,8 @@
         if (captured.has(s)) return s;
         const n = Number(s);
         if (captured.has(n)) return n;
-        for (const k of captured.keys()) if (String(k) === String(s) || String(k).endsWith(String(s))) return k;
+        // confronto testuale esatto: il suffisso NON basta, "12345" combacerebbe con "9912345"
+        for (const k of captured.keys()) if (String(k) === String(s)) return k;
         return s;
     }
 
@@ -1552,17 +1612,17 @@
     /* ------------------------------------------------------------------ */
 
     function segGeometry(id) {
-        try {
-            const seg = sdk.DataModel.Segments.getById({ segmentId: id });
-            if (seg && seg.geometry && seg.geometry.coordinates) return seg.geometry.coordinates;
-        } catch (e) { /* fallback */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const seg = W.model.segments.getObjectById(id);
-            const g = seg.getOLGeometry ? seg.getOLGeometry() : seg.geometry;
-            if (g && g.components) return g.components.map(c => merc2wgs(c.x, c.y));
-        } catch (e) { /* niente */ }
-        return null;
+        return firstOk(
+            () => {
+                const seg = sdk.DataModel.Segments.getById({ segmentId: id });
+                return (seg && seg.geometry && seg.geometry.coordinates) || null;
+            },
+            () => {
+                const seg = WME().model.segments.getObjectById(id);
+                const g = seg.getOLGeometry ? seg.getOLGeometry() : seg.geometry;
+                return (g && g.components) ? g.components.map(c => merc2wgs(c.x, c.y)) : null;
+            }
+        );
     }
 
     function merc2wgs(x, y) {
@@ -1604,12 +1664,25 @@
         return [coords[coords.length - 1][0], coords[coords.length - 1][1]];
     }
 
-    function distPointToPolyline(lon, lat, coords, cosLat) {
-        const px = lon * 111320 * cosLat, py = lat * 111320;
+    const M_PER_DEG = 111320;
+
+    // Porta la polilinea su un piano locale in metri: [x0,y0,x1,y1,...].
+    // Va fatto UNA volta per segmento, non a ogni civico da confrontare.
+    function projectPolyline(coords, cosLat) {
+        const p = new Float64Array(coords.length * 2);
+        for (let i = 0, j = 0; i < coords.length; i++) {
+            p[j++] = coords[i][0] * M_PER_DEG * cosLat;
+            p[j++] = coords[i][1] * M_PER_DEG;
+        }
+        return p;
+    }
+
+    // Distanza (metri) fra un punto gia' proiettato e una polilinea gia' proiettata
+    function distToProjected(px, py, proj) {
         let best = Infinity;
-        let ax = coords[0][0] * 111320 * cosLat, ay = coords[0][1] * 111320;
-        for (let i = 1; i < coords.length; i++) {
-            const bx = coords[i][0] * 111320 * cosLat, by = coords[i][1] * 111320;
+        let ax = proj[0], ay = proj[1];
+        for (let j = 2; j < proj.length; j += 2) {
+            const bx = proj[j], by = proj[j + 1];
             const dx = bx - ax, dy = by - ay;
             let t = 0;
             const l2 = dx * dx + dy * dy;
@@ -1622,11 +1695,22 @@
         return best;
     }
 
+    // Comodo per i confronti isolati (un punto contro una polilinea sola)
+    function distPointToPolyline(lon, lat, coords, cosLat) {
+        return distToProjected(lon * M_PER_DEG * cosLat, lat * M_PER_DEG, projectPolyline(coords, cosLat));
+    }
+
     /* ------------------------------------------------------------------ */
     /* Livello mappa dei civici (SDK)                                      */
     /* ------------------------------------------------------------------ */
 
     let layerReady = false, layerFailed = false;
+
+    // Legge una proprieta' della feature dallo styleContext dell'SDK, col suo valore di riserva
+    const featProp = (name, fallback) => ctx => {
+        const p = ctx && ctx.feature && ctx.feature.properties;
+        return (p && p[name] != null && p[name] !== '') ? p[name] : fallback;
+    };
 
     function ensureLayer() {
         if (layerReady || layerFailed) return layerReady;
@@ -1654,21 +1738,15 @@
                     }
                 }],
                 styleContext: {
-                    fillColor: ctx => (ctx && ctx.feature && ctx.feature.properties && ctx.feature.properties.color) || '#777777',
-                    strokeColor: ctx => (ctx && ctx.feature && ctx.feature.properties && ctx.feature.properties.stroke) || '#ffffff',
-                    strokeWidth: ctx => {
-                        const p = ctx && ctx.feature && ctx.feature.properties;
-                        return (p && p.w != null) ? p.w : 1.5;
-                    },
-                    strokeOpacity: ctx => {
-                        const p = ctx && ctx.feature && ctx.feature.properties;
-                        return (p && p.so != null) ? p.so : 1;
-                    },
-                    strokeDashstyle: ctx => (ctx && ctx.feature && ctx.feature.properties && ctx.feature.properties.dash) || 'solid',
-                    label: ctx => (ctx && ctx.feature && ctx.feature.properties && ctx.feature.properties.label) || ''
+                    fillColor: featProp('color', '#777777'),
+                    strokeColor: featProp('stroke', '#ffffff'),
+                    strokeWidth: featProp('w', 1.5),
+                    strokeOpacity: featProp('so', 1),
+                    strokeDashstyle: featProp('dash', 'solid'),
+                    label: featProp('label', '')
                 }
             });
-            try { sdk.Map.setLayerVisibility({ layerName: LAYER, visibility: true }); } catch (e) { /* facoltativo */ }
+            try { sdk.Map.setLayerVisibility({ layerName: LAYER, visibility: true }); } catch { /* facoltativo */ }
             layerReady = true;
         } catch (e) {
             layerFailed = true;
@@ -1680,7 +1758,7 @@
 
     function updateCiviciLayer(features) {
         if (!ensureLayer()) return;
-        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch (e) { /* ignora */ }
+        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
         try { sdk.Map.addFeaturesToLayer({ layerName: LAYER, features }); }
         catch (e) { log('addFeaturesToLayer KO', e); }
         raiseOwnLayer();
@@ -1691,18 +1769,18 @@
     let zBumpLogged = false;
     function raiseOwnLayer() {
         try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
+            const W = WME();
             if (!W || !W.map || !Array.isArray(W.map.layers) || typeof W.map.setLayerIndex !== 'function') return;
             const lyr = W.map.layers.find(l => l && typeof l.name === 'string' && l.name.indexOf(LAYER) !== -1);
             if (!lyr) return;
             W.map.setLayerIndex(lyr, W.map.layers.length - 1);
             if (!zBumpLogged) { zBumpLogged = true; log('livello portato sopra gli evidenziatori'); }
-        } catch (e) { /* il colore acceso resta comunque */ }
+        } catch { /* il colore acceso resta comunque */ }
     }
 
     function clearCiviciLayer() {
         if (!layerReady) return;
-        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch (e) { /* ignora */ }
+        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
     }
 
     // Evidenziazione dei segmenti in lista: casing scuro + tratteggio nel colore scelto.
@@ -1740,7 +1818,7 @@
         if (!mem.n) { toast('Prima scarica i dati della regione.'); return; }
 
         const radius = settings.raggio;
-        const dLat = radius / 111320;
+        const dLat = radius / M_PER_DEG;
         const results = new Map(); // gid -> {dist, count}
         // Lo stesso record ANNCSU puo' cadere entro il raggio di PIU' segmenti della lista (una via
         // spezzata in tronconi, le due carreggiate di un viale, una laterale catturata insieme).
@@ -1757,24 +1835,26 @@
             }
             const midLat = (minLat + maxLat) / 2;
             const cosLat = Math.cos(midLat * Math.PI / 180);
-            const dLon = radius / (111320 * cosLat);
-            const cand = gridQueryBBox(minLon - dLon, minLat - dLat, maxLon + dLon, maxLat + dLat);
-            for (const i of cand) {
-                const d = distPointToPolyline(mem.lons[i], mem.lats[i], coords, cosLat);
-                if (d > radius) continue;
+            const dLon = radius / (M_PER_DEG * cosLat);
+            const proj = projectPolyline(coords, cosLat);
+            const kx = M_PER_DEG * cosLat;
+            gridForEachInBBox(minLon - dLon, minLat - dLat, maxLon + dLon, maxLat + dLat, i => {
+                const d = distToProjected(mem.lons[i] * kx, mem.lats[i] * M_PER_DEG, proj);
+                if (d > radius) return;
                 const g = mem.gids[i];
                 let r = results.get(g);
                 if (!r) { r = { dist: d, count: 0, uniq: new Set() }; results.set(g, r); }
                 // civici distinti: numero + esponente; gli accessi senza numero contano singolarmente
                 const cv = mem.civn[i] || 0, ce = mem.cive[i] || 0;
                 r.uniq.add((cv || ce) ? cv * 1024 + ce : -(i + 1));
-                r.count = r.uniq.size;
                 if (d < r.dist) r.dist = d;
                 const prev = ptBest.get(i);
                 if (!prev) ptBest.set(i, { i, g, d });
                 else if (d < prev.d) prev.d = d;
-            }
+            });
         }
+        // il totale dei civici distinti si legge alla fine, non a ogni punto trovato
+        for (const r of results.values()) r.count = r.uniq.size;
         const pts = [...ptBest.values()]; // civici agganciati, uno per record: {i, g, d}
 
         lastResults = [...results.entries()]
@@ -1831,7 +1911,7 @@
         }
 
         if (!lastResults.length) {
-            ui.results.innerHTML = `Nessun civico ANNCSU entro ${radius} m. Aumenta il raggio, oppure il Comune non ha ancora caricato le coordinate nell'archivio.`;
+            if (ui.results) ui.results.innerHTML = `Nessun civico ANNCSU entro ${radius} m. Aumenta il raggio, oppure il Comune non ha ancora caricato le coordinate nell'archivio.`;
             lastDotFeatures = [];
             refreshMapLayer();
             return;
@@ -1883,8 +1963,9 @@
         }).join(' ');
     }
 
+    const HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        return String(s).replace(/[&<>"']/g, c => HTML_ESC[c]);
     }
 
     // Regole di rinomina apprese dall'utente (es. "Strada Contrada " -> "Contrada ")
@@ -1926,7 +2007,7 @@
             note.className = 'wfit-muted';
             note.style.marginBottom = '5px';
             note.title = 'Stesso odonimo e stesso numero civico presenti piu\' volte nei dati ANNCSU (piu\' accessi allo stesso civico) o agganciati da piu\' segmenti. Sono mostrati tutti: nell\'elenco dei civici le ripetizioni sono marcate e arrivano senza spunta, decidi tu quale posizione e\' quella giusta.';
-            note.innerHTML = `&#8505;&#65039; ${lastDupCount} ${lastDupCount === 1 ? 'numero civico ripetuto' : 'numeri civici ripetuti'} nell'archivio: mostrat${lastDupCount === 1 ? 'o' : 'i'} comunque, da valutare.`;
+            note.innerHTML = `&#8505;&#65039; ${lastDupCount} ${pl(lastDupCount, 'numero civico ripetuto', 'numeri civici ripetuti')} nell'archivio: ${pl(lastDupCount, 'mostrato', 'mostrati')} comunque, da valutare.`;
             ui.results.appendChild(note);
         }
         for (const r of results) {
@@ -1967,7 +2048,7 @@
             const info = document.createElement('div');
             info.innerHTML = `<span class="wfit-muted">Comune: <b>${escapeHtml(r.comune)}</b>` +
                 (r.locality ? ` &middot; Localit&agrave;: ${escapeHtml(toWazeCase(r.locality))}` : '') +
-                ` &middot; ~${Math.round(r.dist)} m &middot; ${r.count} civic${r.count === 1 ? 'o' : 'i'}` +
+                ` &middot; ~${Math.round(r.dist)} m &middot; ${r.count} ${pl(r.count, 'civico', 'civici')}` +
                 (r.fileDate ? ` &middot; dati ANNCSU del ${r.fileDate}` : '') + `</span>`;
             div.appendChild(info);
 
@@ -2006,27 +2087,43 @@
     // Modifiche non salvate nell'editor (il WME vieta i civici su segmenti modificati)
     function unsavedCount() {
         try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
+            const W = WME();
             const am = W && W.model && W.model.actionManager;
             if (am) {
                 if (typeof am.unsavedActionsNum === 'function') return am.unsavedActionsNum();
                 if (typeof am.getActions === 'function') return (am.getActions() || []).length;
             }
-        } catch (e) { /* sconosciuto */ }
+        } catch { /* sconosciuto */ }
         return null;
     }
 
     // Traduce gli errori del WME in indicazioni azionabili
     function niceReason(msg) {
         const m = String(msg || 'errore');
-        if (/projected segment|not allowed to add a house number/i.test(m)) return 'segmento con modifiche non salvate: salva (Ctrl+S) e ripremi il bottone';
-        if (/point is a required/i.test(m)) return 'segmento con modifiche non salvate: salva (Ctrl+S) e ripremi il bottone';
+        if (/projected segment|not allowed to add a house number|point is a required/i.test(m)) {
+            return 'segmento con modifiche non salvate: salva (Ctrl+S) e ripremi il bottone';
+        }
         if (/exists|duplicate/i.test(m)) return 'civico gi\u00e0 presente';
         if (/permission|rank|lock/i.test(m)) return 'permessi insufficienti sul segmento';
         return m;
     }
 
+    // Come si presenta una riga in forma 20/1, secondo la modalita' scelta dall'utente
+    const suspNote = () => settings.suspMode === 'includi'
+        ? ['ok', 'incluso su tua scelta']
+        : ['warn', '\u26a0\ufe0f non inserito'];
+
     const HN_MAX_D = 45; // Waze rifiuta i civici troppo lontani dal segmento: oltre questo limite si salta
+    const HN_SAME_D = 40;   // entro questa distanza consideriamo che sia lo stesso civico
+    const HN_SAME_DEG = 6e-4; // pre-filtro grossolano prima della distanza vera (evita mille haversine)
+
+    // Il civico numero X esiste gia' su Waze qui vicino? Unico posto in cui si decide.
+    function findExistingHN(existing, label, lon, lat) {
+        if (!existing || !existing.length) return null;
+        return existing.find(h => h.num === label &&
+            Math.abs(h.c[0] - lon) < HN_SAME_DEG && Math.abs(h.c[1] - lat) < HN_SAME_DEG &&
+            haversine(h.c[0], h.c[1], lon, lat) < HN_SAME_D) || null;
+    }
 
     function hnCandidates(r) {
         const all = (lastPtsByG.get(r.g) || []).filter(p => p.label);
@@ -2034,28 +2131,40 @@
         return { all, list, tooFar: all.length - list.length };
     }
 
+    // Lettura tollerante: "18/B" -> [18, 'B'], "18" -> [18, '']. Serve per ordinare e classificare
+    // etichette che arrivano dall'archivio, dove l'esponente puo' essere qualsiasi cosa.
+    const splitHn = lbl => {
+        const m = /^\s*(\d+)\s*\/?\s*(.*?)\s*$/.exec(String(lbl || ''));
+        return m ? [parseInt(m[1], 10), m[2]] : [0, ''];
+    };
+
+    // Un esponente tutto NUMERICO ("2/4", "1/3") e' l'impronta tipica di una colonna del CSV letta
+    // male: un progressivo o un codice interno appiccicato al civico. Puo' anche essere reale,
+    // ma non lo possiamo sapere da qui: si segnala e decide l'utente, che il territorio lo vede.
+    const isSusp = lbl => { const e = splitHn(lbl)[1]; return !!e && /^\d+$/.test(e); };
+
+    // Validazione stretta di quello che l'utente scrive nella casella:
     // "18b" / "18 B" / "18/b" -> "18/B"; solo numero -> com'e'. null se non valido.
     function normHn(s) {
-        let v = String(s || '').trim().toUpperCase().replace(/\s+/g, '');
-        const m = /^(\d{1,5})(?:[\/]?([A-Z0-9]{1,4}))?$/.exec(v);
+        const m = /^(\d{1,5})(?:\/?([A-Z0-9]{1,4}))?$/.exec(String(s || '').trim().toUpperCase().replace(/\s+/g, ''));
         if (!m) return null;
         return m[2] ? m[1] + '/' + m[2] : m[1];
     }
 
     function mapCenter() {
-        try {
-            const c = sdk.Map.getMapCenter();
-            if (c) {
+        return firstOk(
+            () => {
+                const c = sdk.Map.getMapCenter();
+                if (!c) return null;
                 if (c.lon != null && c.lat != null) return [c.lon, c.lat];
                 if (c.lonLat && c.lonLat.lon != null) return [c.lonLat.lon, c.lonLat.lat];
+                return null;
+            },
+            () => {
+                const c = WME().map.getCenter();
+                return c ? merc2wgs(c.lon != null ? c.lon : c.x, c.lat != null ? c.lat : c.y) : null;
             }
-        } catch (e) { /* legacy */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const c = W.map.getCenter();
-            if (c) return merc2wgs(c.lon != null ? c.lon : c.x, c.lat != null ? c.lat : c.y);
-        } catch (e) { /* niente */ }
-        return null;
+        );
     }
 
     function nearestCapturedDist(lon, lat) {
@@ -2070,9 +2179,12 @@
         return isFinite(best) ? best : 0;
     }
 
+    // Le due firme conosciute di setMapCenter, provate in ordine. true se una ha funzionato.
     function quickCenter(lon, lat) {
-        try { sdk.Map.setMapCenter({ lonLat: { lon, lat } }); return; } catch (e) { /* variante */ }
-        try { sdk.Map.setMapCenter({ lon, lat }); } catch (e) { /* pazienza */ }
+        return !!firstOk(
+            () => { sdk.Map.setMapCenter({ lonLat: { lon, lat } }); return true; },
+            () => { sdk.Map.setMapCenter({ lon, lat }); return true; }
+        );
     }
 
     // Civici gia' presenti su Waze: prova a caricarli davvero (SDK per-segmento, store, legacy)
@@ -2087,31 +2199,29 @@
             if (num == null || !c || c.length < 2) return;
             out.push({ num: String(num), c: [c[0], c[1]] });
         };
-        try {
-            if (HN && typeof HN.getHouseNumbers === 'function' && captured.size) {
-                let r = HN.getHouseNumbers({ segmentIds: [...captured.keys()] });
-                if (r && typeof r.then === 'function') r = await r;
-                if (Array.isArray(r)) r.forEach(push);
+        // getHouseNumbers puo' rispondere sincrona o con una promessa, a seconda della versione
+        const collect = async arg => {
+            let r = HN.getHouseNumbers(arg);
+            if (r && typeof r.then === 'function') r = await r;
+            if (Array.isArray(r)) r.forEach(push);
+        };
+        const hasHN = HN && typeof HN.getHouseNumbers === 'function' && captured.size;
+        try { if (hasHN) await collect({ segmentIds: [...captured.keys()] }); }
+        catch { /* sorgente successiva */ }
+        // il giro per segmento serve solo se la chiamata in blocco non ha dato nulla
+        if (hasHN && !out.length) {
+            for (const id of captured.keys()) {
+                try { await collect({ segmentId: id }); }
+                catch { break; /* firma non supportata */ }
             }
-        } catch (e) { /* sorgente successiva */ }
+        }
+        try { if (HN && typeof HN.getAll === 'function') (HN.getAll() || []).forEach(push); } catch { /* oltre */ }
         try {
-            if (HN && typeof HN.getHouseNumbers === 'function' && captured.size) {
-                for (const id of captured.keys()) {
-                    try {
-                        let r = HN.getHouseNumbers({ segmentId: id });
-                        if (r && typeof r.then === 'function') r = await r;
-                        if (Array.isArray(r)) r.forEach(push);
-                    } catch (e2) { break; /* firma non supportata */ }
-                }
-            }
-        } catch (e) { /* oltre */ }
-        try { if (HN && typeof HN.getAll === 'function') (HN.getAll() || []).forEach(push); } catch (e) { /* oltre */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
+            const W = WME();
             const repo = W.model && W.model.segmentHouseNumbers;
             const arr = repo && typeof repo.getObjectArray === 'function' ? repo.getObjectArray() : null;
             if (arr) arr.forEach(o => push(o && (o.attributes || o)));
-        } catch (e) { /* pazienza */ }
+        } catch { /* pazienza */ }
         const seen = new Set();
         return out.filter(h => {
             const k = h.num + '|' + Math.round(h.c[0] * 1e5) + '|' + Math.round(h.c[1] * 1e5);
@@ -2121,59 +2231,48 @@
         });
     }
 
-    // Passo di controllo: l'utente vede, verifica e SCEGLIE i civici prima dell'inserimento
-    function toggleHnReview(card, r) {
-        const oldBox = card.querySelector('.wfit-hnrev');
-        if (oldBox) { oldBox.remove(); return; }
-        const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
-        if (!HN || typeof HN.addHouseNumber !== 'function') {
-            toast('Questa versione del WME non espone ancora addHouseNumber nell\'SDK: aggiorna l\'editor e riprova.', 8000);
-            return;
-        }
-        // I civici vivono solo su strade CON nome: se i segmenti in lista sono "Senza strada", prima il nome
-        let checkedAny = false, anyNamed = false;
+    /* ------------------------------------------------------------------ */
+    /* Elenco di controllo dei civici                                      */
+    /* ------------------------------------------------------------------ */
+
+    // I civici vivono solo su strade CON nome: se i segmenti in lista sono "Senza strada", prima il nome.
+    // null = non e' stato possibile leggere l'indirizzo di nessun segmento (non blocchiamo per questo).
+    function capturedHaveNamedStreet() {
+        let checkedAny = false;
         for (const id of captured.keys()) {
             try {
                 const ad = sdk.DataModel.Segments.getAddress({ segmentId: id });
                 checkedAny = true;
-                if (ad && !ad.isEmpty && ad.street && ad.street.name) { anyNamed = true; break; }
-            } catch (e) { /* prossimo */ }
+                if (ad && !ad.isEmpty && ad.street && ad.street.name) return true;
+            } catch { /* prossimo */ }
         }
-        if (checkedAny && !anyNamed) {
-            toast('Questi segmenti sono "Senza strada": i numeri civici si possono inserire SOLO su strade con il nome della via. Prima premi "Applica ai segmenti" e salva, poi riapri l\'elenco dei civici.', 11000);
-            return;
-        }
-        const cand = hnCandidates(r);
-        if (!cand.all.length) { toast('Per questo odonimo non ci sono civici numerati agganciati.'); return; }
+        return checkedAny ? false : null;
+    }
+
+    // Motivo per cui l'elenco non si puo' aprire, oppure null se si puo'
+    function hnReviewBlocker(cand) {
+        if (!cand.all.length) return { msg: 'Per questo odonimo non ci sono civici numerati agganciati.' };
         if (!cand.list.length) {
-            toast(`Tutti i ${cand.all.length} civici di questo odonimo sono oltre ${HN_MAX_D} m dalla strada: Waze li rifiuterebbe al salvataggio. Vanno inseriti a mano (piazzali vicino alla strada e trascinali sul punto reale).`, 12000);
-            return;
+            return {
+                msg: `Tutti i ${cand.all.length} civici di questo odonimo sono oltre ${HN_MAX_D} m dalla strada: Waze li rifiuterebbe al salvataggio. Vanno inseriti a mano (piazzali vicino alla strada e trascinali sul punto reale).`,
+                ms: 12000
+            };
         }
-        // ordina per numero civico (poi per esponente): il giro di verifica segue la strada,
-        // non la distanza dal segmento
-        const hnKey = lbl => {
-            const m = /^(\d+)\s*\/?\s*(.*)$/.exec(String(lbl || '')) || [];
-            return [parseInt(m[1] || '0', 10), m[2] || ''];
-        };
-        cand.list.sort((a, b) => {
-            const ka = hnKey(a.label), kb = hnKey(b.label);
-            return (ka[0] - kb[0]) || ka[1].localeCompare(kb[1]);
-        });
-        // Nessun tetto: si mostrano TUTTI i civici validi trovati, altrimenti i numeri
-        // oltre il cinquantesimo sparivano dal giro di controllo
-        const shown = cand.list;
+        return null;
+    }
 
-
+    // Scheda vuota: intestazione, legenda, elenco e lo stato condiviso fra tutti i pezzi
+    function createHnReviewBox(shown, cand) {
         const box = document.createElement('div');
         box.className = 'wfit-hnrev';
         const head = document.createElement('div');
         head.className = 'wfit-muted';
-        head.innerHTML = `<b>Controlla e conferma</b> \u00b7 ${shown.length} civic${shown.length === 1 ? 'o' : 'i'} pront${shown.length === 1 ? 'o' : 'i'}` +
+        head.innerHTML = `<b>Controlla e conferma</b> \u00b7 ${shown.length} ${pl(shown.length, 'civico pronto', 'civici pronti')}` +
             ' \u00b7 tutti in ordine di numero' +
             (cand.tooFar ? ` \u00b7 ${cand.tooFar} oltre ${HN_MAX_D} m esclusi` : '') +
             ` \u00b7 numero modificabile \u00b7 <a href="javascript:void(0)" data-a="all">tutti</a> / <a href="javascript:void(0)" data-a="none">nessuno</a>`;
         box.appendChild(head);
-        // legenda dei due motivi per cui una riga arriva senza spunta
+        // legenda dei motivi per cui una riga arriva senza spunta
         const legend = document.createElement('div');
         legend.className = 'wfit-muted wfit-hnleg';
         legend.style.display = 'none';
@@ -2181,69 +2280,77 @@
         const listDiv = document.createElement('div');
         listDiv.className = 'wfit-hnlist';
         box.appendChild(listDiv);
-        const rows = [];
-        // Un esponente NUMERICO ("2/4", "1/3") e' l'impronta tipica di una colonna del CSV letta
-        // male: un progressivo o un codice interno appiccicato al civico. Puo' anche essere reale,
-        // ma non lo possiamo sapere da qui. Quindi non si inserisce d'ufficio: si segnala e decide
-        // l'utente, che il territorio lo puo' guardare davvero.
-        const isSusp = lbl => /^\d+\s*\/\s*\d+$/.test(String(lbl || '').trim());
+
         const bGo = document.createElement('button');
-        const updateGo = () => {
-            const k = rows.filter(x => x.cb.checked).length;
-            bGo.textContent = `Inserisci ${k} civic${k === 1 ? 'o' : 'i'}`;
+        const ctx = { box, head, legend, listDiv, bGo, rows: [], legendBits: [] };
+        ctx.updateGo = () => {
+            const k = ctx.rows.filter(x => x.cb.checked).length;
+            bGo.textContent = `Inserisci ${k} ${pl(k, 'civico', 'civici')}`;
             bGo.disabled = !k;
         };
-        const addRowEl = p => {
-            const row = document.createElement('div');
-            p.susp = !p.manual && isSusp(p.label);
-            row.className = 'wfit-hnrow' + (p.susp && settings.suspMode !== 'includi' ? ' wfit-hnsusp'
-                : p.susp ? ' wfit-hnok' : p.dup ? ' wfit-hndup' : '');
-            row.title = (p.susp
-                ? 'Numero in forma numero/numero ("2/4"): pu\u00f2 essere un civico reale, un intervallo scritto male o una colonna del CSV letta male. Di base non viene inserito. Se sul posto esiste davvero cosi\', spuntalo; per trattarli tutti allo stesso modo usa la barra sopra la lista.'
-                : p.dup
-                ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
-                : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).')
-                + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
-            const cb = document.createElement('input');
-            // ripetizioni e numeri in forma 20/1 arrivano senza spunta: restano visibili e
-            // spuntabili a mano, ma di loro iniziativa non finiscono su Waze
-            cb.type = 'checkbox'; cb.checked = !p.dup && !(p.susp && settings.suspMode !== 'includi');
-            if (p.susp && settings.suspMode === 'escludi') row.style.display = 'none';
-            const inp = document.createElement('input');
-            inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.label;
-            inp.addEventListener('input', () => inp.classList.remove('wfit-bad-in'));
-            // Layout su due righe: sopra spunta, numero e distanza (sempre corti, mai a capo),
-            // sotto la nota solo quando serve. Prima era tutto su una riga sola e in un pannello
-            // stretto il testo si spezzava una parola per riga.
-            const dist = document.createElement('span'); dist.className = 'wfit-muted wfit-hnd';
-            dist.textContent = p.manual ? 'aggiunto da te' : `~${Math.round(p.d)} m`;
-            const top = document.createElement('div'); top.className = 'wfit-hntop';
-            top.appendChild(cb); top.appendChild(inp); top.appendChild(dist);
-            const note = document.createElement('div'); note.className = 'wfit-hnnote';
-            row.appendChild(top); row.appendChild(note);
-            const setNote = (kind, txt) => {
-                note.className = 'wfit-hnnote' + (kind ? ' wfit-n-' + kind : '');
-                note.textContent = txt || '';
-                note.style.display = txt ? '' : 'none';
-            };
-            row.setNote = setNote;
-            if (p.susp) {
-                setNote(settings.suspMode === 'includi' ? 'ok' : 'warn',
-                    settings.suspMode === 'includi' ? 'incluso su tua scelta' : '\u26a0\ufe0f non inserito');
-            } else if (p.dup) {
-                setNote('dup', `stesso numero, punto ${p.rep} \u00b7 ${Math.round(p.twinD || 0)} m dal punto 1`);
-            } else {
-                setNote('', '');
-            }
-            row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp && ev.target.tagName !== 'A') quickCenter(p.lon, p.lat); });
-            cb.addEventListener('change', updateGo);
-            listDiv.appendChild(row);
-            rows.push({ cb, inp, p, dist, row, setNote });
-            return row;
+        ctx.refreshLegend = () => {
+            legend.innerHTML = ctx.legendBits.join(' \u00b7 ');
+            legend.style.display = ctx.legendBits.length ? '' : 'none';
         };
-        for (const p of shown) addRowEl(p);
+        ctx.addLegend = bit => { ctx.legendBits.push(bit); ctx.refreshLegend(); };
+        ctx.addRow = p => addHnRow(p, ctx);
+        return ctx;
+    }
 
-        // Civico trovato su Street View: lo scrivi tu e nasce alla posizione attuale del centro mappa
+    // Spiegazione della riga, diversa a seconda di come e' arrivato quel civico
+    function hnRowTitle(p) {
+        const base = p.susp
+            ? 'Numero in forma numero/numero ("2/4"): pu\u00f2 essere un civico reale, un intervallo scritto male o una colonna del CSV letta male. Di base non viene inserito. Se sul posto esiste davvero cosi\', spuntalo; per trattarli tutti allo stesso modo usa la barra sopra la lista.'
+            : p.dup
+            ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
+            : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).';
+        return base + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
+    }
+
+    // Una riga dell'elenco: spunta, numero modificabile, distanza e nota.
+    // Layout su due righe: sopra spunta, numero e distanza (sempre corti, mai a capo),
+    // sotto la nota solo quando serve. Su una riga sola, in un pannello stretto,
+    // il testo si spezzava una parola per riga.
+    function addHnRow(p, ctx) {
+        const row = document.createElement('div');
+        p.susp = !p.manual && isSusp(p.label);
+        row.className = 'wfit-hnrow' + (p.susp && settings.suspMode !== 'includi' ? ' wfit-hnsusp'
+            : p.susp ? ' wfit-hnok' : p.dup ? ' wfit-hndup' : '');
+        row.title = hnRowTitle(p);
+
+        // ripetizioni e numeri in forma 20/1 arrivano senza spunta: restano visibili e
+        // spuntabili a mano, ma di loro iniziativa non finiscono su Waze
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = !p.dup && !(p.susp && settings.suspMode !== 'includi');
+        if (p.susp && settings.suspMode === 'escludi') row.style.display = 'none';
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.label;
+        inp.addEventListener('input', () => inp.classList.remove('wfit-bad-in'));
+        const dist = document.createElement('span'); dist.className = 'wfit-muted wfit-hnd';
+        dist.textContent = p.manual ? 'aggiunto da te' : `~${Math.round(p.d)} m`;
+        const top = document.createElement('div'); top.className = 'wfit-hntop';
+        top.appendChild(cb); top.appendChild(inp); top.appendChild(dist);
+        const note = document.createElement('div'); note.className = 'wfit-hnnote';
+        row.appendChild(top); row.appendChild(note);
+
+        const setNote = (kind, txt) => {
+            note.className = 'wfit-hnnote' + (kind ? ' wfit-n-' + kind : '');
+            note.textContent = txt || '';
+            note.style.display = txt ? '' : 'none';
+        };
+        if (p.susp) setNote(...suspNote());
+        else if (p.dup) setNote('dup', `stesso numero, punto ${p.rep} \u00b7 ${Math.round(p.twinD || 0)} m dal punto 1`);
+        else setNote('', '');
+
+        row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp && ev.target.tagName !== 'A') quickCenter(p.lon, p.lat); });
+        cb.addEventListener('change', ctx.updateGo);
+        ctx.listDiv.appendChild(row);
+        ctx.rows.push({ cb, inp, p, row, setNote });
+        return row;
+    }
+
+    // Civico trovato su Street View: lo scrivi tu e nasce alla posizione attuale del centro mappa
+    function buildHnAddBox(ctx) {
         const addBox = document.createElement('div');
         addBox.className = 'wfit-hnadd';
         const addIn = document.createElement('input');
@@ -2259,142 +2366,318 @@
             if (!c) { toast('Non riesco a leggere il centro mappa in questa versione del WME.'); return; }
             const d = nearestCapturedDist(c[0], c[1]);
             if (d > HN_MAX_D) { toast(`Il centro mappa \u00e8 a ~${Math.round(d)} m dai segmenti in lista: oltre ${HN_MAX_D} m Waze lo rifiuterebbe. Avvicinati alla strada e riprova.`, 9000); return; }
-            const p = { lon: c[0], lat: c[1], label: v, d, manual: true };
-            const row = addRowEl(p);
-            listDiv.prepend(row);
+            const row = ctx.addRow({ lon: c[0], lat: c[1], label: v, d, manual: true });
+            ctx.listDiv.prepend(row);
             addIn.value = '';
-            updateGo();
+            ctx.updateGo();
         };
         addBtn.addEventListener('click', doAdd);
         addIn.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); doAdd(); } });
-        box.appendChild(addBox);
+        return addBox;
+    }
+
+    // Raccoglie i civici spuntati, segnalando numeri non validi e numeri ripetuti
+    function collectHnSelection(ctx) {
+        const sel = [];
+        let bad = false;
+        for (const x of ctx.rows) {
+            if (!x.cb.checked) continue;
+            const v = normHn(x.inp.value);
+            if (!v) { x.inp.classList.add('wfit-bad-in'); bad = true; continue; }
+            sel.push({ lon: x.p.lon, lat: x.p.lat, d: x.p.d, label: v });
+        }
+        if (bad) { toast('Controlla i numeri evidenziati in rosso (formati validi: 18, 18/B, 12/BIS).', 7000); return null; }
+        if (!sel.length) return null;
+        // Waze tiene un solo punto per numero sulla stessa via: se ne hai spuntati due uguali
+        // te lo diciamo, ma la scelta resta tua (il secondo verra' rifiutato al salvataggio)
+        const cnt = {};
+        for (const x of sel) bump(cnt, x.label);
+        const rip = Object.entries(cnt).filter(([, n]) => n > 1).map(([v]) => v);
+        if (rip.length) {
+            toast(`Hai selezionato lo stesso numero in piu' punti (${rip.slice(0, 6).join(', ')}${rip.length > 6 ? '\u2026' : ''}): Waze ne accetta uno solo per via, gli altri verranno rifiutati al salvataggio. Se sai qual e' quello giusto, togli la spunta agli altri.`, 11000);
+        }
+        return sel;
+    }
+
+    // Bottoni "Inserisci" / "Annulla" e i collegamenti "tutti" / "nessuno"
+    function buildHnFooter(ctx, r) {
         const foot = document.createElement('div');
         foot.className = 'wfit-actions';
-        bGo.className = 'wfit-btn wfit-primary';
+        ctx.bGo.className = 'wfit-btn wfit-primary';
         const bNo = document.createElement('button');
         bNo.className = 'wfit-btn'; bNo.textContent = 'Annulla';
-        foot.appendChild(bGo); foot.appendChild(bNo); box.appendChild(foot);
-        updateGo();
-        head.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
+        foot.appendChild(ctx.bGo); foot.appendChild(bNo);
+        bNo.addEventListener('click', () => ctx.box.remove());
+        ctx.bGo.addEventListener('click', () => {
+            const sel = collectHnSelection(ctx);
+            if (!sel) return;
+            ctx.box.remove();
+            runHnInsert(r, sel);
+        });
+        ctx.head.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
             const v = a.dataset.a === 'all';
-            // "tutti" non deve poter aggirare il blocco dei numeri da verificare
             // "tutti" non tira dentro i numero/numero finche' la modalita' e' "non inserito":
             // il loro stato lo decidi con la barra sopra, non di rimbalzo
             let skipped = 0;
-            rows.forEach(x => {
+            ctx.rows.forEach(x => {
                 if (v && x.p.susp && settings.suspMode !== 'includi') { skipped++; return; }
                 x.cb.checked = v;
             });
-            if (skipped) toast(`${skipped} numer${skipped === 1 ? 'o' : 'i'} in forma 20/1 non ${skipped === 1 ? 'incluso' : 'inclusi'}: usa "includi" nella barra, oppure spuntal${skipped === 1 ? 'o' : 'i'} a mano.`, 8000);
-            updateGo();
+            if (skipped) toast(`${skipped} ${pl(skipped, 'numero', 'numeri')} in forma 20/1 non ${pl(skipped, 'incluso', 'inclusi')}: usa "includi" nella barra, oppure ${pl(skipped, 'spuntalo', 'spuntali')} a mano.`, 8000);
+            ctx.updateGo();
         }));
-        bNo.addEventListener('click', () => box.remove());
-        bGo.addEventListener('click', () => {
-            const sel = [];
-            let bad = false;
-            for (const x of rows) {
-                if (!x.cb.checked) continue;
-                const v = normHn(x.inp.value);
-                if (!v) { x.inp.classList.add('wfit-bad-in'); bad = true; continue; }
-                sel.push({ lon: x.p.lon, lat: x.p.lat, d: x.p.d, label: v });
-            }
-            if (bad) { toast('Controlla i numeri evidenziati in rosso (formati validi: 18, 18/B, 12/BIS).', 7000); return; }
-            if (!sel.length) return;
-            // Waze tiene un solo punto per numero sulla stessa via: se ne hai spuntati due uguali
-            // te lo diciamo, ma la scelta resta tua (il secondo verra' rifiutato al salvataggio)
-            const cnt = new Map();
-            for (const x of sel) cnt.set(x.label, (cnt.get(x.label) || 0) + 1);
-            const rip = [...cnt.entries()].filter(([, n]) => n > 1).map(([v]) => v);
-            if (rip.length) {
-                toast(`Hai selezionato lo stesso numero in piu' punti (${rip.slice(0, 6).join(', ')}${rip.length > 6 ? '\u2026' : ''}): Waze ne accetta uno solo per via, gli altri verranno rifiutati al salvataggio. Se sai qual e' quello giusto, togli la spunta agli altri.`, 11000);
-            }
-            box.remove();
-            runHnInsert(r, sel);
-        });
-        const legendBits = [];
-        const refreshLegend = () => {
-            legend.innerHTML = legendBits.join(' \u00b7 ');
-            legend.style.display = legendBits.length ? '' : 'none';
-        };
-        // Scelta in blocco sui numeri in forma numero/numero: la richiesta e' poterli includere o
-        // escludere tutti insieme, senza sbloccarli uno per uno. La scelta resta salvata.
+        return foot;
+    }
+
+    // Scelta in blocco sui numeri in forma numero/numero: si includono o si escludono tutti
+    // insieme, senza sbloccarli uno per uno. La scelta resta salvata.
+    const SUSP_MODES = [
+        ['nonins', 'non inserito', 'Predefinito: restano visibili in lista ma senza spunta, quindi non vengono inseriti. Se ne vuoi uno, spuntalo a mano.'],
+        ['includi', 'includi', 'Li tratta come civici normali, gi\u00e0 spuntati. Usalo se nella tua zona questa forma \u00e8 reale.'],
+        ['escludi', 'escludi', 'Li toglie dalla lista: non li vedi e non li inserisci.']
+    ];
+
+    function buildHnSuspBar(shown, ctx) {
         const nSusp = shown.filter(p => isSusp(p.label)).length;
-        if (nSusp) {
-            const bar = document.createElement('div');
-            bar.className = 'wfit-muted wfit-hnsuspbar';
-            const label = document.createElement('span');
-            label.innerHTML = `<b>${nSusp}</b> in forma 20/1:`;
-            bar.appendChild(label);
-            const modes = [
-                ['nonins', 'non inserito', 'Predefinito: restano visibili in lista ma senza spunta, quindi non vengono inseriti. Se ne vuoi uno, spuntalo a mano.'],
-                ['includi', 'includi', 'Li tratta come civici normali, gi\u00e0 spuntati. Usalo se nella tua zona questa forma \u00e8 reale.'],
-                ['escludi', 'escludi', 'Li toglie dalla lista: non li vedi e non li inserisci.']
-            ];
-            const btns = [];
-            modes.forEach(([mode, txt, tip]) => {
-                const a = document.createElement('a');
-                a.href = 'javascript:void(0)'; a.textContent = txt; a.title = tip;
-                a.className = 'wfit-suspmode';
-                a.addEventListener('click', () => {
-                    settings.suspMode = mode; saveSettings();
-                    btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === mode));
-                    applySuspMode();
-                });
-                btns.push({ el: a, mode });
-                bar.appendChild(a);
-            });
-            const applySuspMode = () => {
-                const m = settings.suspMode;
-                for (const x of rows) {
-                    if (!x.p.susp) continue;
-                    x.row.style.display = (m === 'escludi') ? 'none' : '';
-                    x.row.classList.toggle('wfit-hnsusp', m !== 'includi');
-                    x.row.classList.toggle('wfit-hnok', m === 'includi');
-                    x.cb.checked = (m === 'includi');
-                    x.setNote(m === 'includi' ? 'ok' : 'warn',
-                        m === 'includi' ? 'incluso su tua scelta' : '\u26a0\ufe0f non inserito');
-                }
-                updateGo();
-            };
-            btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === settings.suspMode));
-            legend.parentNode.insertBefore(bar, legend.nextSibling);
-            if (settings.suspMode !== 'includi') {
-                legendBits.push('<span class="wfit-swatch wfit-sw-susp"></span> forma 20/1, non inserito');
-                refreshLegend();
+        if (!nSusp) return;
+        const bar = document.createElement('div');
+        bar.className = 'wfit-muted wfit-hnsuspbar';
+        const label = document.createElement('span');
+        label.innerHTML = `<b>${nSusp}</b> in forma 20/1:`;
+        bar.appendChild(label);
+
+        const applySuspMode = () => {
+            const m = settings.suspMode;
+            for (const x of ctx.rows) {
+                if (!x.p.susp) continue;
+                x.row.style.display = (m === 'escludi') ? 'none' : '';
+                x.row.classList.toggle('wfit-hnsusp', m !== 'includi');
+                x.row.classList.toggle('wfit-hnok', m === 'includi');
+                x.cb.checked = (m === 'includi');
+                x.setNote(...suspNote());
             }
+            ctx.updateGo();
+        };
+        const btns = [];
+        for (const [mode, txt, tip] of SUSP_MODES) {
+            const a = document.createElement('a');
+            a.href = 'javascript:void(0)'; a.textContent = txt; a.title = tip;
+            a.className = 'wfit-suspmode';
+            a.addEventListener('click', () => {
+                settings.suspMode = mode; saveSettings();
+                btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === mode));
+                applySuspMode();
+            });
+            btns.push({ el: a, mode });
+            bar.appendChild(a);
         }
-        if (shown.some(p => p.dup)) {
-            legendBits.push('<span class="wfit-swatch wfit-sw-dup"></span> stesso numero, pi\u00f9 punti');
-            refreshLegend();
-        }
-        card.appendChild(box);
-        // annota i civici gia' presenti su Waze e togli loro la spunta
-        loadExistingHNs().then(ex => {
+        btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === settings.suspMode));
+        ctx.legend.parentNode.insertBefore(bar, ctx.legend.nextSibling);
+        if (settings.suspMode !== 'includi') ctx.addLegend('<span class="wfit-swatch wfit-sw-susp"></span> forma 20/1, non inserito');
+    }
+
+    // Annota i civici gia' presenti su Waze e toglie loro la spunta
+    function annotateExistingHNs(ctx) {
+        return loadExistingHNs().then(ex => {
             if (!ex.length) return;
             let marked = 0;
-            for (const x of rows) {
+            for (const x of ctx.rows) {
                 if (x.p.manual) continue;
-                const lbl = normHn(x.inp.value) || x.p.label;
-                const near = ex.find(h => h.num === lbl &&
-                    Math.abs(h.c[0] - x.p.lon) < 6e-4 && Math.abs(h.c[1] - x.p.lat) < 6e-4 &&
-                    haversine(h.c[0], h.c[1], x.p.lon, x.p.lat) < 40);
-                if (near) {
-                    x.cb.checked = false;
-                    x.row.classList.add('wfit-hnwaze');
-                    x.setNote('waze', 'gi\u00e0 su Waze, niente da fare');
-                    x.row.title = `Questo civico esiste gi\u00e0 sulla mappa a ${Math.round(haversine(near.c[0], near.c[1], x.p.lon, x.p.lat))} m da qui: `
-                        + 'per questo arriva senza spunta. Se lo reinserisci, Waze lo rifiuta come duplicato. '
-                        + 'Spuntalo solo se sei sicuro che quello esistente sia messo male e vuoi provare a correggerlo.'
-                        + `\nCoordinate ANNCSU: ${x.p.lat.toFixed(6)}, ${x.p.lon.toFixed(6)}`;
-                    marked++;
-                }
+                const near = findExistingHN(ex, normHn(x.inp.value) || x.p.label, x.p.lon, x.p.lat);
+                if (!near) continue;
+                x.cb.checked = false;
+                x.row.classList.add('wfit-hnwaze');
+                x.setNote('waze', 'gi\u00e0 su Waze, niente da fare');
+                x.row.title = `Questo civico esiste gi\u00e0 sulla mappa a ${Math.round(haversine(near.c[0], near.c[1], x.p.lon, x.p.lat))} m da qui: `
+                    + 'per questo arriva senza spunta. Se lo reinserisci, Waze lo rifiuta come duplicato. '
+                    + 'Spuntalo solo se sei sicuro che quello esistente sia messo male e vuoi provare a correggerlo.'
+                    + `\nCoordinate ANNCSU: ${x.p.lat.toFixed(6)}, ${x.p.lon.toFixed(6)}`;
+                marked++;
             }
             if (marked) {
-                legendBits.push('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
-                refreshLegend();
-                updateGo();
+                ctx.addLegend('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
+                ctx.updateGo();
             }
         }).catch(() => { /* niente annotazioni */ });
+    }
+
+    // Passo di controllo: l'utente vede, verifica e SCEGLIE i civici prima dell'inserimento
+    function toggleHnReview(card, r) {
+        const oldBox = card.querySelector('.wfit-hnrev');
+        if (oldBox) { oldBox.remove(); return; }
+        const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
+        if (!HN || typeof HN.addHouseNumber !== 'function') {
+            toast('Questa versione del WME non espone ancora addHouseNumber nell\'SDK: aggiorna l\'editor e riprova.', 8000);
+            return;
+        }
+        if (capturedHaveNamedStreet() === false) {
+            toast('Questi segmenti sono "Senza strada": i numeri civici si possono inserire SOLO su strade con il nome della via. Prima premi "Applica ai segmenti" e salva, poi riapri l\'elenco dei civici.', 11000);
+            return;
+        }
+        const cand = hnCandidates(r);
+        const stop = hnReviewBlocker(cand);
+        if (stop) { toast(stop.msg, stop.ms); return; }
+
+        // ordine per numero civico (poi per esponente): il giro di verifica segue la strada,
+        // non la distanza dal segmento. Nessun tetto: si mostrano TUTTI i civici validi.
+        cand.list.sort((a, b) => {
+            const ka = splitHn(a.label), kb = splitHn(b.label);
+            return (ka[0] - kb[0]) || ka[1].localeCompare(kb[1]);
+        });
+        const shown = cand.list;
+
+        const ctx = createHnReviewBox(shown, cand);
+        for (const p of shown) ctx.addRow(p);
+        ctx.box.appendChild(buildHnAddBox(ctx));
+        ctx.box.appendChild(buildHnFooter(ctx, r));
+        ctx.updateGo();
+        buildHnSuspBar(shown, ctx);
+        if (shown.some(p => p.dup)) ctx.addLegend('<span class="wfit-swatch wfit-sw-dup"></span> stesso numero, pi\u00f9 punti');
+        card.appendChild(ctx.box);
+        annotateExistingHNs(ctx);
+    }
+
+    // Il WME rifiuta i civici su segmenti "proiettati", cioe' in stato transitorio
+    const isProjectedError = m => /projected|not allowed to add a house number/i.test(m);
+    const errText = e => String((e && e.message) || 'errore');
+
+    // Firma documentata: { houseNumber, point }; ripiego { number, point }.
+    // La prima che funziona vale per tutto il lotto: si sceglie una volta sola.
+    function makeHouseNumberAdder(HN) {
+        const shapes = [
+            (num, pt) => HN.addHouseNumber({ houseNumber: num, point: { type: 'Point', coordinates: pt } }),
+            (num, pt) => HN.addHouseNumber({ number: num, point: { type: 'Point', coordinates: pt } })
+        ];
+        let shape = -1;
+        const add = (num, pt) => {
+            if (shape >= 0) { shapes[shape](num, pt); return; }
+            for (let i = 0; i < shapes.length; i++) {
+                try { shapes[i](num, pt); shape = i; return; }
+                catch (e) {
+                    if (i < shapes.length - 1 && /invalid argument/i.test(errText(e))) continue;
+                    throw e;
+                }
+            }
+        };
+        add.usedShape = () => shape;
+        return add;
+    }
+
+    // Inserisce l'elenco confermato, tenendo da parte i rifiuti da "segmento proiettato"
+    async function insertHouseNumbers(list, addOne, existing, tally) {
+        const one = p => {
+            if (findExistingHN(existing, p.label, p.lon, p.lat)) { tally.dup++; return; }
+            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; return; }
+            catch (e) {
+                const m = errText(e);
+                if (isProjectedError(m)) { tally.projFails.push(p); return; }
+                // alcune installazioni rifiutano la barra: si ritenta con "18B" al posto di "18/B"
+                if (p.label.includes('/') && /invalid|format|number/i.test(m)) {
+                    try { addOne(p.label.replace('/', ''), [p.lon, p.lat]); tally.ok++; return; }
+                    catch (e2) {
+                        const m2 = errText(e2);
+                        if (isProjectedError(m2)) tally.projFails.push(p); else bump(tally.reasons, niceReason(m2));
+                        return;
+                    }
+                }
+                bump(tally.reasons, niceReason(m));
+            }
+        };
+        let k = 0;
+        for (const p of list) {
+            k++;
+            if (k % 5 === 0) { status(`Inserisco civici: ${k}/${list.length}\u2026`); await tick(); }
+            one(p);
+        }
+    }
+
+    // "projected segment" SENZA modifiche pendenti = segmento in stato transitorio
+    // (post-salvataggio o aggancio a segmento nuovo/senza nome): ricarica la zona e ritenta una volta
+    async function retryProjectedFails(addOne, tally) {
+        const uns = unsavedCount();
+        if (!((uns == null || uns === 0) && canPan())) return;
+        status(`Il WME ha rifiutato ${tally.projFails.length} civici (segmento in transizione): ricarico la zona e ritento\u2026`);
+        suppressUntil = Date.now() + 9000;
+        const retry = tally.projFails.splice(0);
+        const mid = [
+            retry.reduce((s, p) => s + p.lon, 0) / retry.length,
+            retry.reduce((s, p) => s + p.lat, 0) / retry.length
+        ];
+        await panTo(mid);
+        for (const p of retry) {
+            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; }
+            catch (e) {
+                const m = errText(e);
+                if (isProjectedError(m)) tally.projFails.push(p); else bump(tally.reasons, niceReason(m));
+            }
+        }
+    }
+
+    // Segmenti caricati, ridotti a id + geometria: serve per capire a quale strada
+    // apparteneva un civico rifiutato
+    function loadedSegmentGeometries() {
+        try {
+            if (!sdk.DataModel.Segments || typeof sdk.DataModel.Segments.getAll !== 'function') return null;
+            return (sdk.DataModel.Segments.getAll() || [])
+                .map(s => (s && s.geometry && s.geometry.coordinates && s.geometry.coordinates.length > 1)
+                    ? { id: s.id, c: s.geometry.coordinates } : null)
+                .filter(Boolean);
+        } catch { return null; }
+    }
+
+    // Segmento caricato piu' vicino a un punto (pre-filtro a riquadro, poi distanza vera)
+    function nearestLoadedSegment(segs, lon, lat) {
+        if (!segs) return null;
+        const cosLat = Math.cos(lat * Math.PI / 180);
+        let bestD = Infinity, bestId = null;
+        for (const s of segs) {
+            let inBox = false;
+            for (const q of s.c) { if (Math.abs(q[0] - lon) < 0.003 && Math.abs(q[1] - lat) < 0.002) { inBox = true; break; } }
+            if (!inBox) continue;
+            const d = distPointToPolyline(lon, lat, s.c, cosLat);
+            if (d < bestD) { bestD = d; bestId = s.id; }
+        }
+        return bestId;
+    }
+
+    function segmentIsNamed(id) {
+        try {
+            const ad = sdk.DataModel.Segments.getAddress({ segmentId: id });
+            return !!(ad && !ad.isEmpty && ad.street && ad.street.name);
+        } catch { return true; /* nel dubbio non accusiamo la strada */ }
+    }
+
+    // Perche' quei civici sono stati rifiutati? lock troppo alto, strada senza nome, o altro
+    function diagnoseProjectedFails(projFails, reasons) {
+        const uns = unsavedCount();
+        if (uns != null && uns > 0) {
+            bump(reasons, 'segmento con modifiche non salvate: salva (Ctrl+S) e riconferma', projFails.length);
+            return;
+        }
+        const segs = loadedSegmentGeometries();
+        const ur = userRank();
+        const cnt = { lock: 0, unnamed: 0, other: 0 };
+        for (const p of projFails) {
+            const id = nearestLoadedSegment(segs, p.lon, p.lat);
+            if (id != null) {
+                const lk = segEffLock(id);
+                if (ur != null && lk != null && lk > ur) { cnt.lock++; continue; }
+                if (!segmentIsNamed(id)) { cnt.unnamed++; continue; }
+            }
+            cnt.other++;
+        }
+        if (cnt.lock) bump(reasons, 'non hai i permessi su questa strada (bloccata sopra il tuo livello): chiedi lo sblocco alla community', cnt.lock);
+        if (cnt.unnamed) bump(reasons, 'la strada pi\u00f9 vicina al punto \u00e8 senza nome: dalle prima un nome (catturala con lo script), poi riprova', cnt.unnamed);
+        if (cnt.other) bump(reasons, 'rifiutato dal WME: zooma di pi\u00f9 sulla zona o ricarica la pagina e riprova (oppure inseriscilo a mano)', cnt.other);
+    }
+
+    function hnInsertSummary(tally, nome) {
+        let msg = `${tally.ok} ${pl(tally.ok, 'civico confermato e inserito', 'civici confermati e inseriti')} per "${nome}"`;
+        if (tally.dup) msg += ` \u00b7 ${tally.dup} gi\u00e0 su Waze: ${pl(tally.dup, 'non reinserito', 'non reinseriti')}`;
+        const rk = Object.entries(tally.reasons);
+        if (rk.length) msg += ' \u00b7 falliti: ' + rk.map(([m, c]) => `${c}\u00d7 ${m}`).join('; ');
+        msg += tally.ok ? '. Controlla i civici sulla mappa e salva.' : '.';
+        return { msg, failed: rk.length };
     }
 
     // Inserisce SOLO i civici confermati dall'utente
@@ -2404,155 +2687,26 @@
         if (!list || !list.length) return;
         const uns = unsavedCount();
         if (uns != null && uns > 0) {
-            toast(`Hai ${uns} modifich${uns === 1 ? 'a' : 'e'} non salvat${uns === 1 ? 'a' : 'e'}: il WME non permette di aggiungere civici su segmenti modificati. Salva (Ctrl+S), poi riapri l'elenco e riconferma.`, 10000);
+            toast(`Hai ${uns} ${pl(uns, 'modifica non salvata', 'modifiche non salvate')}: il WME non permette di aggiungere civici su segmenti modificati. Salva (Ctrl+S), poi riapri l'elenco e riconferma.`, 10000);
             return;
         }
         if (busy) { toast('Attendi la fine dell\'operazione in corso.'); return; }
         beginBusy();
         suppressUntil = Date.now() + 4000;
         try {
-            // civici già presenti su Waze (caricati per davvero, quando possibile)
+            // civici gia' presenti su Waze (caricati per davvero, quando possibile)
             const existing = await loadExistingHNs();
+            const addOne = makeHouseNumberAdder(HN);
+            const tally = { ok: 0, dup: 0, reasons: {}, projFails: [] };
 
-            // Firma documentata: { houseNumber, point }; ripiego { number, point }.
-            let shape = -1;
-            const shapes = [
-                (num, pt) => HN.addHouseNumber({ houseNumber: num, point: { type: 'Point', coordinates: pt } }),
-                (num, pt) => HN.addHouseNumber({ number: num, point: { type: 'Point', coordinates: pt } })
-            ];
-            const addOne = (num, pt) => {
-                if (shape >= 0) { shapes[shape](num, pt); return; }
-                for (let i = 0; i < shapes.length; i++) {
-                    try { shapes[i](num, pt); shape = i; return; }
-                    catch (e) {
-                        const m = String((e && e.message) || '');
-                        if (i < shapes.length - 1 && /invalid argument/i.test(m)) continue;
-                        throw e;
-                    }
-                }
-            };
+            await insertHouseNumbers(list, addOne, existing, tally);
+            if (tally.projFails.length) await retryProjectedFails(addOne, tally);
+            if (tally.projFails.length) diagnoseProjectedFails(tally.projFails, tally.reasons);
 
-            let ok = 0, dup = 0, k = 0;
-            const reasons = {};
-            const projFails = [];
-            const isProj = m => /projected|not allowed to add a house number/i.test(m);
-            const tryPoint = async p => {
-                if (existing.length) {
-                    const near = existing.find(h => h.num === p.label &&
-                        Math.abs(h.c[0] - p.lon) < 6e-4 && Math.abs(h.c[1] - p.lat) < 6e-4 &&
-                        haversine(h.c[0], h.c[1], p.lon, p.lat) < 40);
-                    if (near) { dup++; return; }
-                }
-                try { addOne(p.label, [p.lon, p.lat]); ok++; return; }
-                catch (e) {
-                    const m = String((e && e.message) || 'errore');
-                    if (isProj(m)) { projFails.push(p); return; }
-                    if (p.label.includes('/') && /invalid|format|number/i.test(m)) {
-                        try { addOne(p.label.replace('/', ''), [p.lon, p.lat]); ok++; return; }
-                        catch (e2) {
-                            const m2 = String((e2 && e2.message) || 'errore');
-                            if (isProj(m2)) { projFails.push(p); return; }
-                            reasons[niceReason(m2)] = (reasons[niceReason(m2)] || 0) + 1; return;
-                        }
-                    }
-                    reasons[niceReason(m)] = (reasons[niceReason(m)] || 0) + 1;
-                }
-            };
-            for (const p of list) {
-                k++;
-                if (k % 5 === 0) { status(`Inserisco civici: ${k}/${list.length}\u2026`); await tick(); }
-                await tryPoint(p);
-            }
-
-            // "projected segment" SENZA modifiche pendenti = segmento in stato transitorio
-            // (post-salvataggio o aggancio a segmento nuovo/senza nome): ricarica la zona e ritenta una volta
-            if (projFails.length) {
-                const uns2 = unsavedCount();
-                if ((uns2 == null || uns2 === 0) && canPan()) {
-                    status(`Il WME ha rifiutato ${projFails.length} civici (segmento in transizione): ricarico la zona e ritento\u2026`);
-                    suppressUntil = Date.now() + 9000;
-                    const mid = [
-                        projFails.reduce((s, p) => s + p.lon, 0) / projFails.length,
-                        projFails.reduce((s, p) => s + p.lat, 0) / projFails.length
-                    ];
-                    await panTo(mid);
-                    const retry = projFails.splice(0);
-                    for (const p of retry) {
-                        try { addOne(p.label, [p.lon, p.lat]); ok++; }
-                        catch (e) {
-                            const m = String((e && e.message) || 'errore');
-                            if (isProj(m)) projFails.push(p);
-                            else reasons[niceReason(m)] = (reasons[niceReason(m)] || 0) + 1;
-                        }
-                    }
-                }
-                if (projFails.length) {
-                    const uns3 = unsavedCount();
-                    if (uns3 != null && uns3 > 0) {
-                        const m = 'segmento con modifiche non salvate: salva (Ctrl+S) e riconferma';
-                        reasons[m] = (reasons[m] || 0) + projFails.length;
-                    } else {
-                        // diagnosi per punto: lock troppo alto / strada senza nome / altro
-                        let segsAll2 = null;
-                        try {
-                            if (sdk.DataModel.Segments && typeof sdk.DataModel.Segments.getAll === 'function') {
-                                segsAll2 = (sdk.DataModel.Segments.getAll() || [])
-                                    .map(s => (s && s.geometry && s.geometry.coordinates && s.geometry.coordinates.length > 1)
-                                        ? { id: s.id, c: s.geometry.coordinates } : null)
-                                    .filter(Boolean);
-                            }
-                        } catch (e) { segsAll2 = null; }
-                        const ur = userRank();
-                        let maxLv = -1;
-                        const cnt = { lock: 0, unnamed: 0, other: 0 };
-                        for (const p of projFails) {
-                            let bestD = Infinity, bestId = null;
-                            if (segsAll2) {
-                                const cosLat = Math.cos(p.lat * Math.PI / 180);
-                                for (const s of segsAll2) {
-                                    let inBox = false;
-                                    for (const q of s.c) { if (Math.abs(q[0] - p.lon) < 0.003 && Math.abs(q[1] - p.lat) < 0.002) { inBox = true; break; } }
-                                    if (!inBox) continue;
-                                    const d = distPointToPolyline(p.lon, p.lat, s.c, cosLat);
-                                    if (d < bestD) { bestD = d; bestId = s.id; }
-                                }
-                            }
-                            if (bestId != null) {
-                                const lk = segEffLock(bestId);
-                                if (ur != null && lk != null && lk > ur) { cnt.lock++; if (lk > maxLv) maxLv = lk; continue; }
-                                let named = true;
-                                try {
-                                    const ad = sdk.DataModel.Segments.getAddress({ segmentId: bestId });
-                                    named = !!(ad && !ad.isEmpty && ad.street && ad.street.name);
-                                } catch (e) { /* lascia true */ }
-                                if (!named) { cnt.unnamed++; continue; }
-                            }
-                            cnt.other++;
-                        }
-                        if (cnt.lock) {
-                            const m = 'non hai i permessi su questa strada (bloccata sopra il tuo livello): chiedi lo sblocco alla community';
-                            reasons[m] = (reasons[m] || 0) + cnt.lock;
-                        }
-                        if (cnt.unnamed) {
-                            const m = 'la strada pi\u00f9 vicina al punto \u00e8 senza nome: dalle prima un nome (catturala con lo script), poi riprova';
-                            reasons[m] = (reasons[m] || 0) + cnt.unnamed;
-                        }
-                        if (cnt.other) {
-                            const m = 'rifiutato dal WME: zooma di pi\u00f9 sulla zona o ricarica la pagina e riprova (oppure inseriscilo a mano)';
-                            reasons[m] = (reasons[m] || 0) + cnt.other;
-                        }
-                    }
-                }
-            }
             status('');
-            let msg = `${ok} civic${ok === 1 ? 'o' : 'i'} confermat${ok === 1 ? 'o' : 'i'} e inserit${ok === 1 ? 'o' : 'i'} per "${toWazeCase(r.name)}"`;
-            if (dup) msg += ` \u00b7 ${dup} gi\u00e0 su Waze: non reinserit${dup === 1 ? 'o' : 'i'}`;
-            if (list.length > 50) msg += ` \u00b7 ne restano ~${list.length - 50}: salva e riapri l'elenco`;
-            const rk = Object.entries(reasons);
-            if (rk.length) msg += ' \u00b7 falliti: ' + rk.map(([m, c]) => `${c}\u00d7 ${m}`).join('; ');
-            msg += ok ? '. Controlla i civici sulla mappa e salva.' : '.';
-            toast(msg, rk.length ? 15000 : 8000);
-            if (ok) log(`house number inseriti con firma #${shape}`);
+            const { msg, failed } = hnInsertSummary(tally, toWazeCase(r.name));
+            toast(msg, failed ? 15000 : 8000);
+            if (tally.ok) log(`house number inseriti con firma #${addOne.usedShape()}`);
         } finally {
             endBusy();
         }
@@ -2568,7 +2722,7 @@
                 const a = seg.alternateStreetIds || seg.streetIds;
                 if (Array.isArray(a)) alts = a.slice();
             }
-        } catch (e) { /* sotto */ }
+        } catch { /* sotto */ }
         try {
             if (pn == null || alts == null) {
                 const ad = sdk.DataModel.Segments.getAddress({ segmentId: id });
@@ -2577,18 +2731,17 @@
                     if (alts == null && Array.isArray(ad.altStreets)) alts = ad.altStreets.map(s => s && s.id).filter(x => x != null);
                 }
             }
-        } catch (e) { /* ignoto */ }
+        } catch { /* ignoto */ }
         try {
             if (pn == null || alts == null) {
-                const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-                const s = W.model.segments.getObjectById(id);
+                const s = WME().model.segments.getObjectById(id);
                 const a = s && (s.attributes || s);
                 if (a) {
                     if (pn == null && a.primaryStreetID != null) pn = a.primaryStreetID;
                     if (alts == null && Array.isArray(a.streetIDs)) alts = a.streetIDs.slice();
                 }
             }
-        } catch (e) { /* pazienza */ }
+        } catch { /* pazienza */ }
         return { pn, alts };
     }
 
@@ -2597,12 +2750,11 @@
         try {
             const C = sdk.DataModel.Cities;
             if (C && typeof C.getById === 'function') { const c = C.getById({ cityId: cid }); if (c && c.name) return c.name; }
-        } catch (e) { /* sotto */ }
+        } catch { /* sotto */ }
         try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const c = W.model.cities.getObjectById(cid);
+            const c = WME().model.cities.getObjectById(cid);
             if (c) return (c.attributes && c.attributes.name) || '';
-        } catch (e) { /* niente */ }
+        } catch { /* niente */ }
         return '';
     }
     function streetLabel(id) {
@@ -2612,62 +2764,196 @@
                 const s = S.getById({ streetId: id });
                 if (s) { const c = cityNameById(s.cityId); return (s.name || '(senza nome)') + (c ? ', ' + c : ''); }
             }
-        } catch (e) { /* sotto */ }
+        } catch { /* sotto */ }
         try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
+            const W = WME();
             const s = W.model.streets.getObjectById(id);
             if (s) {
                 const a = s.attributes || s;
                 let cn = '';
-                try { const c = W.model.cities.getObjectById(a.cityID); cn = (c && c.attributes && c.attributes.name) || ''; } catch (e2) { /* vuoto */ }
+                try { const c = W.model.cities.getObjectById(a.cityID); cn = (c && c.attributes && c.attributes.name) || ''; } catch { /* vuoto */ }
                 return (a.name || '(senza nome)') + (cn ? ', ' + cn : '');
             }
-        } catch (e) { /* niente */ }
+        } catch { /* niente */ }
         return '#' + id;
     }
 
     // Gli ID delle vie possono arrivare come numero o come testo: confronto tollerante
     const sameId = (a, b) => a != null && b != null && String(a) === String(b);
 
+    // Prima proprieta' non nulla fra quelle indicate (0 e' un valore valido: solo null/undefined saltano)
+    const pick = (o, ...keys) => {
+        if (!o) return null;
+        for (const k of keys) if (o[k] != null) return o[k];
+        return null;
+    };
+
     // Livello dell'utente (0-based: L1 = 0)
     function userRank() {
-        try {
-            if (sdk.State && typeof sdk.State.getUserInfo === 'function') {
-                const u = sdk.State.getUserInfo();
-                if (u && u.rank != null) return u.rank;
+        return firstOk(
+            () => (sdk.State && typeof sdk.State.getUserInfo === 'function') ? pick(sdk.State.getUserInfo(), 'rank') : null,
+            () => {
+                const W = WME();
+                const u = W.loginManager && W.loginManager.user;
+                if (!u) return null;
+                const r = pick(u, 'rank') != null ? pick(u, 'rank') : pick(u.attributes, 'rank');
+                if (r != null) return r;
+                return typeof u.getRank === 'function' ? u.getRank() : null;
             }
-        } catch (e) { /* legacy */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const u = W.loginManager && W.loginManager.user;
-            if (u) {
-                if (u.rank != null) return u.rank;
-                if (u.attributes && u.attributes.rank != null) return u.attributes.rank;
-                if (typeof u.getRank === 'function') return u.getRank();
-            }
-        } catch (e) { /* ignoto */ }
-        return null;
+        );
     }
 
     // Lock effettivo del segmento (manuale se presente, altrimenti automatico)
     function segEffLock(id) {
-        try {
-            const s = sdk.DataModel.Segments.getById({ segmentId: id });
-            if (s) {
-                if (s.lockRank != null) return s.lockRank;
-                if (s.rank != null) return s.rank;
+        return firstOk(
+            () => pick(sdk.DataModel.Segments.getById({ segmentId: id }), 'lockRank', 'rank'),
+            () => {
+                const s = WME().model.segments.getObjectById(id);
+                return pick(s && (s.attributes || s), 'lockRank', 'rank');
             }
-        } catch (e) { /* legacy */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const s = W.model.segments.getObjectById(id);
-            const a = s && (s.attributes || s);
-            if (a) {
-                if (a.lockRank != null) return a.lockRank;
-                if (a.rank != null) return a.rank;
+        );
+    }
+
+    // Le due vie da usare secondo la modalita' scelta: fuori dal centro abitato il nome primario
+    // va sulla citta' vuota ("Nessuno") e quello alternativo sulla citta' vera.
+    function resolveApplyStreets(streetName, cityName, extra) {
+        const city = resolveCity(cityName);
+        if (!city) throw new Error(`comune "${cityName}" non risolvibile via SDK (impostalo una volta a mano su un segmento vicino)`);
+        if (!extra) return { pnStreet: getOrAddStreet(streetName, city.id), anStreet: null };
+        const emptyCity = resolveEmptyCity();
+        if (!emptyCity) throw new Error('citt\u00e0 vuota ("Nessuno") non trovata nel modello: apri/aggiungi in zona un segmento senza citt\u00e0 e riprova');
+        return {
+            pnStreet: getOrAddStreet(streetName, emptyCity.id),
+            anStreet: getOrAddStreet(streetName, city.id)
+        };
+    }
+
+    // Pre-scansione: c'e' qualcosa di non allineato (vecchi alternativi, doppioni)?
+    // Se si', si chiede conferma UNA volta e poi si riallinea tutto il lotto.
+    function askStaleCleanup(ids, staleOf) {
+        const staleLabels = new Set();
+        let staleSegs = 0, staleTot = 0;
+        for (const id of ids) {
+            let st = null;
+            try { st = segAddressState(id); } catch { continue; }
+            const stale = staleOf(st);
+            if (!stale.length) continue;
+            staleSegs++; staleTot += stale.length;
+            for (const a of stale) { if (staleLabels.size < 8) staleLabels.add(streetLabel(a)); }
+        }
+        if (!staleTot) return false;
+        const esempi = [...staleLabels].slice(0, 6).join('; ');
+        return window.confirm(
+            `${SCRIPT_NAME}: su ${staleSegs} ${pl(staleSegs, 'segmento', 'segmenti')} ci sono ${staleTot} ${pl(staleTot, 'nome alternativo', 'nomi alternativi')} ${pl(staleTot, 'NON previsto', 'NON previsti')} dalle scelte dello script:\n` +
+            `\u2022 ${esempi}${staleLabels.size > 6 ? '\u2026' : ''}\n\n` +
+            `OK = rimuovili e riallinea tutto (PN/AN come impostato)\n` +
+            `Annulla = mantienili (lo script aggiunge senza togliere)`);
+    }
+
+    const applyFailReason = m => /lock|rank|permission|not allowed|consentit/i.test(m)
+        ? 'segmento bloccato o permessi insufficienti (serve un unlock)' : m;
+
+    // Applica SOLO cio' che manca a un segmento, poi VERIFICA che il WME abbia registrato davvero:
+    // se la prima strategia non lascia il segmento come voluto si prova l'altra; se anche quella
+    // fallisce il segmento finisce fra i falliti (niente successi fantasma).
+    // Restituisce 'ok', 'notloaded', oppure il motivo del fallimento.
+    function makeSegmentApplier(plan) {
+        const { pnStreet, anStreet, targetAlts, staleOf, cleanMode, tally } = plan;
+        return async id => {
+            let seg = null;
+            try { seg = sdk.DataModel.Segments.getById({ segmentId: id }); } catch { /* sotto */ }
+            if (!seg) return 'notloaded';
+
+            const st = segAddressState(id);
+            const known = Array.isArray(st.alts);
+            const stale = staleOf(st);
+            const needPn = !sameId(st.pn, pnStreet.id);
+            const anPresent = anStreet && known && st.alts.some(a => sameId(a, anStreet.id));
+            const needAn = !!anStreet && !anPresent;
+            const needClean = cleanMode && stale.length > 0;
+            if (!needPn && !needAn && !needClean) { tally.skipped++; return 'ok'; }
+
+            const wantAlts = known
+                ? (needClean ? [...new Set(targetAlts)] : [...new Set([...st.alts, ...targetAlts])])
+                : null;
+
+            let anViaLegacy = false;
+            const strategies = [];
+            if (wantAlts) {
+                strategies.push(() => {
+                    sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id, alternateStreetIds: wantAlts });
+                });
             }
-        } catch (e) { /* ignoto */ }
-        return null;
+            strategies.push(() => {
+                sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id });
+                if (needAn) anViaLegacy = legacyAddAlternate(id, anStreet.id);
+            });
+
+            let lastErr = null, lastNow = null;
+            for (const run of strategies) {
+                anViaLegacy = false;
+                try { run(); } catch (e) { lastErr = e; continue; }
+                await tick(); // un respiro: il modello deve digerire la modifica prima della verifica
+                // verifica: com'e' DAVVERO il segmento adesso? (confronto tollerante sugli ID)
+                const now = segAddressState(id);
+                lastNow = now;
+                const pnOk = sameId(now.pn, pnStreet.id);
+                const anNow = !anStreet ? true
+                    : (Array.isArray(now.alts) ? now.alts.some(a => sameId(a, anStreet.id)) : anViaLegacy || anPresent);
+                if (pnOk && (anNow || !needAn)) {
+                    tally.applied++;
+                    if (needAn) { if (anNow) tally.anOk++; else tally.anManual++; }
+                    if (needClean) {
+                        const still = staleOf(now);
+                        if (!still.length) tally.cleaned += stale.length;
+                        else tally.cleanFailed += still.length;
+                    }
+                    return 'ok';
+                }
+                lastErr = new Error('il WME non ha registrato la modifica come richiesto');
+            }
+            log('verifica fallita', id, '\u00b7 PN atteso', pnStreet.id, '\u00b7 letto', lastNow && lastNow.pn, '\u00b7 alternativi letti', lastNow && lastNow.alts);
+            return applyFailReason(lastErr && lastErr.message ? String(lastErr.message) : 'modifica rifiutata dal WME');
+        };
+    }
+
+    // Segmenti fuori dall'area caricata: ci si sposta sopra uno per uno e si riprova
+    async function retryOffscreenSegments(notLoaded, tryApply, noteFail) {
+        if (!canPan()) {
+            for (const id of notLoaded) noteFail(id, 'fuori dall\'area caricata: torna sulla zona e ripremi Applica', false);
+            return;
+        }
+        let j = 0;
+        for (const id of notLoaded) {
+            j++;
+            status(`Recupero segmenti fuori vista: ${j}/${notLoaded.length}\u2026`);
+            suppressUntil = Date.now() + 6000;
+            const info = captured.get(id);
+            const mid = info && info.coords ? lineMidpoint(info.coords) : null;
+            if (!mid) { noteFail(id, 'geometria non memorizzata', false); continue; }
+            await panTo(mid);
+            const r = await tryApply(id);
+            if (r === 'notloaded') noteFail(id, 'non caricato neppure dopo lo spostamento (se hai salvato di recente l\'id potrebbe essere cambiato: ricatturalo)', false);
+            else if (r !== 'ok') noteFail(id, r);
+        }
+    }
+
+    function applySummary(tally, failReasons, extra, streetName, cityName) {
+        let msg = extra
+            ? `PN "${streetName}" (citt\u00e0: Nessuno): ${tally.applied} ${pl(tally.applied, 'modificato', 'modificati')}`
+            : `"${streetName}" (${cityName}): ${tally.applied} ${pl(tally.applied, 'modificato', 'modificati')}`;
+        if (tally.skipped) msg += ` \u00b7 gi\u00e0 a posto (nessuna modifica): ${tally.skipped}`;
+        if (tally.cleaned) msg += ` \u00b7 riallineati: ${tally.cleaned} ${pl(tally.cleaned, 'alternativo non conforme rimosso', 'alternativi non conformi rimossi')}`;
+        if (tally.cleanFailed) msg += ` \u00b7 ${tally.cleanFailed} ${pl(tally.cleanFailed, 'alternativo non rimovibile', 'alternativi non rimovibili')} via SDK: toglili a mano`;
+        if (extra && tally.anOk) msg += ` \u00b7 AN "${streetName}, ${cityName}" ${pl(tally.anOk, 'aggiunto', 'aggiunti')}: ${tally.anOk}`;
+        if (extra && tally.anManual) msg += ` \u00b7 AN da aggiungere a mano: ${tally.anManual}`;
+        if (failReasons.size) {
+            const perMotivo = {};
+            for (const m of failReasons.values()) bump(perMotivo, m);
+            msg += ' \u00b7 falliti (in rosso in lista): ' +
+                Object.entries(perMotivo).map(([m, c]) => `${c}\u00d7 ${m}`).join('; ');
+        }
+        return msg;
     }
 
     async function applyToSegments(streetName, cityName, suggestedName) {
@@ -2678,114 +2964,23 @@
         const extra = settings.applyMode !== 'urb';
         beginBusy();
         try {
-            const city = resolveCity(cityName);
-            if (!city) throw new Error(`comune "${cityName}" non risolvibile via SDK (impostalo una volta a mano su un segmento vicino)`);
-
-            let pnStreet, anStreet = null;
-            if (extra) {
-                const emptyCity = resolveEmptyCity();
-                if (!emptyCity) throw new Error('citt\u00e0 vuota ("Nessuno") non trovata nel modello: apri/aggiungi in zona un segmento senza citt\u00e0 e riprova');
-                pnStreet = getOrAddStreet(streetName, emptyCity.id);
-                anStreet = getOrAddStreet(streetName, city.id);
-            } else {
-                pnStreet = getOrAddStreet(streetName, city.id);
-            }
-
-            let applied = 0, skipped = 0, anOk = 0, anManual = 0, cleaned = 0, cleanFailed = 0;
-            const failReasons = new Map();
+            const { pnStreet, anStreet } = resolveApplyStreets(streetName, cityName, extra);
             const targetAlts = anStreet ? [anStreet.id] : [];
+            // alternativi presenti che non rientrano nelle scelte dello script
             const staleOf = st => Array.isArray(st.alts)
                 ? st.alts.filter(a => !sameId(a, pnStreet.id) && !targetAlts.some(t => sameId(t, a)))
                 : [];
 
-            // Pre-scansione: c'e' qualcosa di non allineato (vecchi alternativi, doppioni)?
-            // Se si', si chiede conferma UNA volta e poi si riallinea tutto il lotto.
-            let cleanMode = false;
-            {
-                const staleLabels = new Set();
-                let staleSegs = 0, staleTot = 0;
-                for (const id of ids) {
-                    let st = null;
-                    try { st = segAddressState(id); } catch (e) { continue; }
-                    const stale = staleOf(st);
-                    if (stale.length) {
-                        staleSegs++; staleTot += stale.length;
-                        for (const a of stale) { if (staleLabels.size < 8) staleLabels.add(streetLabel(a)); }
-                    }
-                }
-                if (staleTot > 0) {
-                    const esempi = [...staleLabels].slice(0, 6).join('; ');
-                    cleanMode = window.confirm(
-                        `${SCRIPT_NAME}: su ${staleSegs} segment${staleSegs === 1 ? 'o' : 'i'} ci sono ${staleTot} nom${staleTot === 1 ? 'e' : 'i'} alternativ${staleTot === 1 ? 'o' : 'i'} NON previst${staleTot === 1 ? 'o' : 'i'} dalle scelte dello script:\n` +
-                        `\u2022 ${esempi}${staleLabels.size > 6 ? '\u2026' : ''}\n\n` +
-                        `OK = rimuovili e riallinea tutto (PN/AN come impostato)\n` +
-                        `Annulla = mantienili (lo script aggiunge senza togliere)`);
-                }
-            }
-
-            const applyReason = m => /lock|rank|permission|not allowed|consentit/i.test(m)
-                ? 'segmento bloccato o permessi insufficienti (serve un unlock)' : m;
-
-            // Applica SOLO ciò che manca, poi VERIFICA che il WME abbia registrato davvero:
-            // se la prima strategia non lascia il segmento come voluto, si prova l'altra;
-            // se anche quella fallisce, il segmento finisce tra i falliti (niente successi fantasma).
-            const tryApply = async id => {
-                let seg = null;
-                try { seg = sdk.DataModel.Segments.getById({ segmentId: id }); } catch (e) { /* sotto */ }
-                if (!seg) return 'notloaded';
-
-                const st = segAddressState(id);
-                const known = Array.isArray(st.alts);
-                const stale = staleOf(st);
-                const needPn = !sameId(st.pn, pnStreet.id);
-                const anPresent = anStreet && known && st.alts.some(a => sameId(a, anStreet.id));
-                const needAn = !!anStreet && !anPresent;
-                const needClean = cleanMode && stale.length > 0;
-
-                if (!needPn && !needAn && !needClean) { skipped++; return 'ok'; }
-
-                const wantAlts = known
-                    ? (needClean ? [...new Set(targetAlts)] : [...new Set([...st.alts, ...targetAlts])])
-                    : null;
-
-                let anViaLegacy = false;
-                const strategies = [];
-                if (wantAlts) {
-                    strategies.push(() => {
-                        sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id, alternateStreetIds: wantAlts });
-                    });
-                }
-                strategies.push(() => {
-                    sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id });
-                    if (needAn) anViaLegacy = legacyAddAlternate(id, anStreet.id);
-                });
-
-                let lastErr = null, lastNow = null;
-                for (const run of strategies) {
-                    anViaLegacy = false;
-                    try { run(); } catch (e) { lastErr = e; continue; }
-                    await tick(); // un respiro: il modello deve digerire la modifica prima della verifica
-                    // verifica: com'e' DAVVERO il segmento adesso? (confronto tollerante sugli ID)
-                    const now = segAddressState(id);
-                    lastNow = now;
-                    const pnOk = sameId(now.pn, pnStreet.id);
-                    const anNow = !anStreet ? true
-                        : (Array.isArray(now.alts) ? now.alts.some(a => sameId(a, anStreet.id)) : anViaLegacy || anPresent);
-                    if (pnOk && (anNow || !needAn)) {
-                        applied++;
-                        if (needAn) { if (anNow) anOk++; else anManual++; }
-                        if (needClean) {
-                            const still = staleOf(now);
-                            if (!still.length) cleaned += stale.length;
-                            else cleanFailed += still.length;
-                        }
-                        return 'ok';
-                    }
-                    lastErr = new Error('il WME non ha registrato la modifica come richiesto');
-                }
-                log('verifica fallita', id, '\u00b7 PN atteso', pnStreet.id, '\u00b7 letto', lastNow && lastNow.pn, '\u00b7 alternativi letti', lastNow && lastNow.alts);
-                return applyReason(lastErr && lastErr.message ? String(lastErr.message) : 'modifica rifiutata dal WME');
+            const tally = { applied: 0, skipped: 0, anOk: 0, anManual: 0, cleaned: 0, cleanFailed: 0 };
+            const failReasons = new Map();
+            const noteFail = (id, r, verbose = true) => {
+                failReasons.set(id, r);
+                if (verbose) log('Applica fallito', id, r);
             };
+            const tryApply = makeSegmentApplier({
+                pnStreet, anStreet, targetAlts, staleOf,
+                cleanMode: askStaleCleanup(ids, staleOf), tally
+            });
 
             const notLoaded = [];
             let k = 0;
@@ -2795,52 +2990,20 @@
                 if (k % 6 === 0) await tick();
                 const r = await tryApply(id);
                 if (r === 'notloaded') notLoaded.push(id);
-                else if (r !== 'ok') { failReasons.set(id, r); log('Applica fallito', id, r); }
+                else if (r !== 'ok') noteFail(id, r);
             }
-
-            if (notLoaded.length) {
-                if (canPan()) {
-                    let j = 0;
-                    for (const id of notLoaded) {
-                        j++;
-                        status(`Recupero segmenti fuori vista: ${j}/${notLoaded.length}\u2026`);
-                        suppressUntil = Date.now() + 6000;
-                        const info = captured.get(id);
-                        const mid = info && info.coords ? lineMidpoint(info.coords) : null;
-                        if (!mid) { failReasons.set(id, 'geometria non memorizzata'); continue; }
-                        await panTo(mid);
-                        const r = await tryApply(id);
-                        if (r === 'notloaded') failReasons.set(id, 'non caricato neppure dopo lo spostamento (se hai salvato di recente l\'id potrebbe essere cambiato: ricatturalo)');
-                        else if (r !== 'ok') { failReasons.set(id, r); log('Applica fallito', id, r); }
-                    }
-                } else {
-                    for (const id of notLoaded) failReasons.set(id, 'fuori dall\'area caricata: torna sulla zona e ripremi Applica');
-                }
-            }
+            if (notLoaded.length) await retryOffscreenSegments(notLoaded, tryApply, noteFail);
             status('');
 
             lastFailedIds = new Set(failReasons.keys());
             updateCapturedUI();
 
-            let msg = extra
-                ? `PN "${streetName}" (citt\u00e0: Nessuno): ${applied} modificat${applied === 1 ? 'o' : 'i'}`
-                : `"${streetName}" (${cityName}): ${applied} modificat${applied === 1 ? 'o' : 'i'}`;
-            if (skipped) msg += ` \u00b7 gi\u00e0 a posto (nessuna modifica): ${skipped}`;
-            if (cleaned) msg += ` \u00b7 riallineati: ${cleaned} alternativ${cleaned === 1 ? 'o' : 'i'} non conform${cleaned === 1 ? 'e' : 'i'} rimoss${cleaned === 1 ? 'o' : 'i'}`;
-            if (cleanFailed) msg += ` \u00b7 ${cleanFailed} alternativ${cleanFailed === 1 ? 'o' : 'i'} non rimovibil${cleanFailed === 1 ? 'e' : 'i'} via SDK: toglili a mano`;
-            if (extra && anOk) msg += ` \u00b7 AN "${streetName}, ${cityName}" aggiunt${anOk === 1 ? 'o' : 'i'}: ${anOk}`;
-            if (extra && anManual) msg += ` \u00b7 AN da aggiungere a mano: ${anManual}`;
-            if (failReasons.size) {
-                const perMotivo = {};
-                for (const m of failReasons.values()) perMotivo[m] = (perMotivo[m] || 0) + 1;
-                msg += ' \u00b7 falliti (in rosso in lista): ' +
-                    Object.entries(perMotivo).map(([m, c]) => `${c}\u00d7 ${m}`).join('; ');
-            }
-            if (applied > 0 && suggestedName) {
+            let msg = applySummary(tally, failReasons, extra, streetName, cityName);
+            if (tally.applied > 0 && suggestedName) {
                 const rule = learnNameRule(suggestedName, streetName);
                 if (rule) msg += ` \u00b7 regola memorizzata: "${rule.from.trim()}" \u2192 "${rule.to.trim()}" (le prossime caselle si precompilano cos\u00ec)`;
             }
-            msg += applied ? '. Rivedi le modifiche e salva.' : '.';
+            msg += tally.applied ? '. Rivedi le modifiche e salva.' : '.';
             toast(msg, failReasons.size ? 15000 : 8000);
         } catch (e) {
             navigator.clipboard && navigator.clipboard.writeText(streetName);
@@ -2852,25 +3015,19 @@
 
     function canPan() { return sdk.Map && typeof sdk.Map.setMapCenter === 'function'; }
 
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-
     // Centra la mappa su un punto e aspetta che il WME carichi i dati della zona
     async function panTo(mid) {
-        try { sdk.Map.setMapCenter({ lonLat: { lon: mid[0], lat: mid[1] } }); }
-        catch (e1) {
-            try { sdk.Map.setMapCenter({ lon: mid[0], lat: mid[1] }); }
-            catch (e2) { return false; }
-        }
+        if (!quickCenter(mid[0], mid[1])) return false;
         try {
             await Promise.race([sdk.Events.once({ eventName: 'wme-map-data-loaded' }), sleep(6000)]);
-        } catch (e) { await sleep(1500); }
+        } catch { await sleep(1500); }
         await sleep(350);
         return true;
     }
 
     function getOrAddStreet(streetName, cityId) {
         let street = null;
-        try { street = sdk.DataModel.Streets.getStreet({ cityId, streetName }); } catch (e) { /* non esiste ancora */ }
+        try { street = sdk.DataModel.Streets.getStreet({ cityId, streetName }); } catch { /* non esiste ancora */ }
         if (!street) street = sdk.DataModel.Streets.addStreet({ cityId, streetName });
         if (!street || street.id == null) throw new Error('impossibile creare la via "' + streetName + '"');
         try {
@@ -2890,26 +3047,24 @@
     // La "citta vuota" (Nessuno) del paese in cui si sta editando
     function resolveEmptyCity() {
         const C = sdk.DataModel.Cities;
-        try {
-            if (C && typeof C.getAll === 'function') {
+        return firstOk(
+            () => {
+                if (!C || typeof C.getAll !== 'function') return null;
                 const c = C.getAll().find(x => x && (x.isEmpty === true || x.name === '' || x.name == null));
-                if (c && c.id != null) return c;
+                return (c && c.id != null) ? c : null;
+            },
+            () => {
+                const c = WME().model.cities.getObjectArray().find(x => x.attributes && x.attributes.isEmpty);
+                return c ? { id: c.attributes.id, isEmpty: true } : null;
             }
-        } catch (e) { /* oltre */ }
-        try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const c = W.model.cities.getObjectArray().find(x => x.attributes && x.attributes.isEmpty);
-            if (c) return { id: c.attributes.id, isEmpty: true };
-        } catch (e) { /* niente */ }
-        return null;
+        );
     }
 
     // Nome alternativo con azione legacy quando l'SDK non lo supporta
     function legacyAddAlternate(segmentId, streetId) {
         try {
-            const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.W : window.W);
-            const req = (typeof unsafeWindow !== 'undefined' && unsafeWindow.require) ? unsafeWindow.require
-                : (typeof require === 'function' ? require : null);
+            const W = WME();
+            const req = WREQ();
             if (!W || !req) return false;
             const AddAlt = req('Waze/Action/AddAlternateStreet');
             const seg = W.model.segments.getObjectById(segmentId);
@@ -2917,7 +3072,7 @@
             if ((seg.getAttribute ? seg.getAttribute('streetIDs') : seg.attributes.streetIDs || []).includes(streetId)) return true;
             W.model.actionManager.add(new AddAlt(seg, streetId));
             return true;
-        } catch (e) { return false; }
+        } catch { return false; }
     }
 
     function resolveCity(cityName) {
@@ -2937,7 +3092,7 @@
         }
         attempts.push(() => (typeof C.getTopCity === 'function') ? C.getTopCity() : null);
         for (const fn of attempts) {
-            try { const r = fn(); if (r && r.id != null) return r; } catch (e) { /* prossimo */ }
+            try { const r = fn(); if (r && r.id != null) return r; } catch { /* prossimo */ }
         }
         return null;
     }
