@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.1.1
+// @version      0.1.2
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -63,9 +63,10 @@
     // 1) Pubblica il Web App di Apps Script (Distribuisci > Nuova distribuzione > Applicazione web,
     //    "Esegui come: me", "Chi ha accesso: chiunque") e incolla qui l'URL che finisce con /exec.
     // 2) Incolla lo STESSO token che hai messo in Proprieta' script su Apps Script (WFIT_TOKEN).
-    const GAS_URL = 'https://script.google.com/macros/s/AKfycbyqY5rbcjPdShWcFFmBBc6P-wZmgL0Vn4t4ya_jqwGnR7iO9rVHTZ_f1zfzFj1TDftNSA/exec';        // es. https://script.google.com/macros/s/AKfy.../exec
-    const GAS_TOKEN = '1aa4f7f7330e4164bc8cc4ef3a5ea9886892ebc1';  // stringa lunga a caso, uguale a quella su Apps Script
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycbyqY5rbcjPdShWcFFmBBc6P-wZmgL0Vn4t4ya_jqwGnR7iO9rVHTZ_f1zfzFj1TDftNSA/exec'; // es. https://script.google.com/macros/s/AKfy.../exec
+    const GAS_TOKEN = '1aa4f7f7330e4164bc8cc4ef3a5ea9886892ebc1'; // stringa lunga a caso, uguale a quella su Apps Script
 
+    const DOWNLOAD_URL = 'https://github.com/checcoconf/wme-fonti-stradali-it/releases/latest/download/wme-fonti-stradali-it.user.js';
     const AUTH_KEY = 'wmeFontiIT_auth_v1';
     const LOGQ_KEY = 'wmeFontiIT_logq_v1';
     const AUTH_TTL_H = 2;     // ogni quante ore si richiede di nuovo il permesso al foglio
@@ -313,7 +314,7 @@
             const r = await gasCall({ action: 'auth', user: u.name, rank: u.rank, livello: livelloDaRank(u.rank), userId: u.id, sessione: SESSION_ID });
             const ok = !!(r && r.ok && r.autorizzato);
             writeAuthCache({ user: u.name, ok, ts: Date.now(), ruolo: r && r.ruolo, nota: r && r.nota });
-            if (ok) return { ok: true, user: u.name, ruolo: r.ruolo, nota: r.nota };
+            if (ok) return { ok: true, user: u.name, ruolo: r.ruolo, nota: r.nota, versioneMin: r.versioneMin };
             return { ok: false, code: 401, user: u.name, reason: (r && (r.messaggio || r.motivo)) || 'utente non presente nell\'elenco degli abilitati.' };
         } catch (e) {
             // Il foglio non risponde: se poco fa eri abilitato si continua per un periodo di
@@ -323,6 +324,34 @@
             }
             return { ok: false, code: 401, user: u.name, reason: 'non riesco a verificare l\'abilitazione (' + e.message + ').' };
         }
+    }
+
+    // Confronta 0.2.10 e 0.3.0 come si deve: -1 se a e' precedente a b
+    function confrontaVersioni(a, b) {
+        const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+            const x = pa[i] || 0, y = pb[i] || 0;
+            if (x !== y) return x < y ? -1 : 1;
+        }
+        return 0;
+    }
+
+    // Versione troppo vecchia: si blocca e si manda ad aggiornare. Serve quando una
+    // versione ha un difetto che sporca la mappa o il registro.
+    function renderAggiorna(minima) {
+        if (!panelEl) return;
+        panelEl.innerHTML = `
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-sec wfit-401">
+    <div class="wfit-401code">Aggiornamento necessario</div>
+    <p>Stai usando la versione <b>${VERSION}</b>, ma i coordinatori richiedono almeno la <b>${escapeHtml(String(minima))}</b>.</p>
+    <p>Apri il link qui sotto: Tampermonkey propone l'aggiornamento, poi ricarica il WME.</p>
+    <div class="wfit-row">
+      <a class="wfit-btn wfit-primary" href="${DOWNLOAD_URL}" target="_blank" rel="noopener">Aggiorna adesso</a>
+    </div>
+    <p class="wfit-muted">In alternativa: Tampermonkey &rarr; Utility &rarr; Controlla aggiornamenti degli userscript.</p>
+  </div>`;
+        log(`versione ${VERSION} troppo vecchia: richiesta almeno la ${minima}`);
     }
 
     function deniedHtml(info) {
@@ -626,6 +655,10 @@
         const r = await checkAuthorization(false);
         authInfo = r;
         if (!r.ok) { renderDenied(r); return; }   // niente cattura, niente dati, niente civici
+        if (r.versioneMin && confrontaVersioni(VERSION, r.versioneMin) < 0) {
+            renderAggiorna(r.versioneMin);
+            return;
+        }
         const u = currentUser();
         authInfo.rank = u.rank;
         log(`utente ${r.user} autorizzato${r.ruolo ? ' (' + r.ruolo + ')' : ''}${r.offline ? ' - in tolleranza, foglio non raggiungibile' : ''}`);
@@ -642,7 +675,6 @@
         initSaveTracking();
         loadIstat();
         loadCache();
-        logEvent('avvio_sessione', { esito: 'ok', motivo: authInfo.offline ? 'verifica non riuscita: avvio in tolleranza' : '' });
         flushLogs();
         // ricontrollo periodico: se i coordinatori tolgono l'utente, lo script si chiude da solo
         setInterval(async () => {
