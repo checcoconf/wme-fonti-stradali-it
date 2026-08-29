@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.1.3
+// @version      0.1.4
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -308,12 +308,12 @@
         }
         const cached = readAuthCache(u.name);
         if (!force && cached && cached.ok && Date.now() - cached.ts < AUTH_TTL_H * 3600000) {
-            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota, cached: true };
+            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota, versioneMin: cached.versioneMin, cached: true };
         }
         try {
             const r = await gasCall({ action: 'auth', user: u.name, rank: u.rank, livello: livelloDaRank(u.rank), userId: u.id, sessione: SESSION_ID });
             const ok = !!(r && r.ok && r.autorizzato);
-            writeAuthCache({ user: u.name, ok, ts: Date.now(), ruolo: r && r.ruolo, nota: r && r.nota });
+            writeAuthCache({ user: u.name, ok, ts: Date.now(), ruolo: r && r.ruolo, nota: r && r.nota, versioneMin: r && r.versioneMin });
             if (ok) return { ok: true, user: u.name, ruolo: r.ruolo, nota: r.nota, versioneMin: r.versioneMin };
             return { ok: false, code: 401, user: u.name, reason: (r && (r.messaggio || r.motivo)) || 'utente non presente nell\'elenco degli abilitati.' };
         } catch (e) {
@@ -542,7 +542,6 @@
         if (!scadute.length) return;
         pendingLog = pendingLog.filter(r => Date.parse(r.ts) >= limite);
         for (const r of scadute) {
-            r.salvato = '';
             r.motivo = (r.motivo ? r.motivo + ' \u00b7 ' : '') + 'salvataggio non verificato';
             enqueueLog(r);
         }
@@ -553,10 +552,8 @@
 
     function promuoviPending(nota) {
         if (!pendingLog.length) return;
-        const quando = new Date().toISOString();
         const n = pendingLog.length;
         for (const r of pendingLog) {
-            r.salvato = quando;
             if (nota) r.motivo = (r.motivo ? r.motivo + ' \u00b7 ' : '') + nota;
             enqueueLog(r);
         }
@@ -620,6 +617,20 @@
         setInterval(() => { if (logQueue.length) flushLogs(); }, 120000);
     }
 
+    async function controllaAbilitazione() {
+        if (!authInfo.ok) return;
+        const c = await checkAuthorization(true);
+        if (!c.ok) { lockDown(c.reason); return; }
+        if (c.versioneMin && confrontaVersioni(VERSION, c.versioneMin) < 0) {
+            authInfo = { ok: false, user: c.user, reason: 'versione troppo vecchia', code: 426 };
+            pendingLog = [];
+            captured.clear();
+            try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
+            try { sdk.Events.off({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); } catch { /* ignora */ }
+            renderAggiorna(c.versioneMin);
+        }
+    }
+
     // Chiusura immediata: l'abilitazione e' stata tolta mentre l'editor era aperto
     function lockDown(reason) {
         if (!authInfo.ok) return;
@@ -678,12 +689,9 @@
         loadIstat();
         loadCache();
         flushLogs();
-        // ricontrollo periodico: se i coordinatori tolgono l'utente, lo script si chiude da solo
-        setInterval(async () => {
-            if (!authInfo.ok) return;
-            const c = await checkAuthorization(true);
-            if (!c.ok) lockDown(c.reason);
-        }, AUTH_RECHECK_MIN * 60000);
+        // Ricontrollo periodico: copre sia la revoca dell'abilitazione sia una nuova
+        // versione minima imposta dai coordinatori mentre l'editor e' gia' aperto.
+        setInterval(controllaAbilitazione, AUTH_RECHECK_MIN * 60000);
     }
 
     // Scorciatoia (se l'SDK la supporta) per passare al volo tra ALT+clic / Sempre / Spenta
@@ -3674,6 +3682,8 @@
         };
         // forza l'invio subito, utile per capire se il foglio risponde
         w.wfitInvia = () => { promuoviPending('invio forzato dall\'utente'); return flushLogs(); };
+        // ricontrollo immediato di abilitazione e versione minima
+        w.wfitControlla = () => { clearAuthCache(); return controllaAbilitazione(); };
     } catch { /* niente console */ }
 
     // Hook per test automatici fuori dal browser (in WME "module" non esiste: blocco inerte)
