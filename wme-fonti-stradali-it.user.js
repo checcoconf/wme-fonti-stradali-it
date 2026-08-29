@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.1.2
+// @version      0.1.3
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -457,14 +457,16 @@
             azione
         }, extra || {});
 
-        // Solo cio' che ha davvero cambiato la mappa aspetta il salvataggio: errori, duplicati
-        // e "gia' a posto" non modificano niente, quindi si registrano subito.
+        // Nel registro finisce SOLO cio' che cambia davvero la mappa e viene salvato.
+        // Errori, duplicati, "gia' a posto" e scarichi di dati non lasciano traccia: li
+        // vedi nel riepilogo a schermo, non nell'archivio permanente.
         const modificaMappa = riga.esito === 'modificato' || riga.esito === 'inserito';
-        if (modificaMappa && saveTracking) {
+        if (!modificaMappa) return;
+        if (saveTracking) {
             pendingLog.push(riga);
             if (pendingLog.length > LOG_MAX_QUEUE) pendingLog.splice(0, pendingLog.length - LOG_MAX_QUEUE);
         } else {
-            if (modificaMappa) riga.motivo = (riga.motivo ? riga.motivo + ' \u00b7 ' : '') + 'salvataggio non verificabile su questo editor';
+            riga.motivo = (riga.motivo ? riga.motivo + ' \u00b7 ' : '') + 'salvataggio non verificabile su questo editor';
             enqueueLog(riga);
         }
     }
@@ -1281,7 +1283,6 @@
         endBusy();
         readyStatus(regs);
         toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (rec.fileDate ? ` Dataset del ${rec.fileDate}.` : ''));
-        logEvent('dati', { esito: 'scaricato', motivo: `${regNome(reg)}: ${fmtN(rec.count)} civici, ${fmtN(rec.groups.length)} odonimi`, dataset: rec.fileDate || '' });
     }
 
     // Ciclo su piu' regioni: una alla volta, con barra complessiva e possibilita' di fermarsi.
@@ -3424,23 +3425,38 @@
     }
 
     // Segmenti fuori dall'area caricata: ci si sposta sopra uno per uno e si riprova
-    async function retryOffscreenSegments(notLoaded, tryApply, noteFail) {
+    async function retryOffscreenSegments(notLoaded, tryApply, noteFail, recSeg, esitoDi, tally) {
+        const fuoriArea = 'fuori dall\'area caricata: torna sulla zona e ripremi Applica';
         if (!canPan()) {
-            for (const id of notLoaded) noteFail(id, 'fuori dall\'area caricata: torna sulla zona e ripremi Applica', false);
+            for (const it of notLoaded) {
+                noteFail(it.id, fuoriArea, false);
+                recSeg(it.id, 'errore', fuoriArea, it.before);
+            }
             return;
         }
         let j = 0;
-        for (const id of notLoaded) {
+        for (const it of notLoaded) {
             j++;
             status(`Recupero segmenti fuori vista: ${j}/${notLoaded.length}\u2026`);
             suppressUntil = Date.now() + 6000;
-            const info = captured.get(id);
+            const info = captured.get(it.id);
             const mid = info && info.coords ? lineMidpoint(info.coords) : null;
-            if (!mid) { noteFail(id, 'geometria non memorizzata', false); continue; }
+            if (!mid) {
+                noteFail(it.id, 'geometria non memorizzata', false);
+                recSeg(it.id, 'errore', 'geometria non memorizzata', it.before);
+                continue;
+            }
             await panTo(mid);
-            const r = await tryApply(id);
-            if (r === 'notloaded') noteFail(id, 'non caricato neppure dopo lo spostamento (se hai salvato di recente l\'id potrebbe essere cambiato: ricatturalo)', false);
-            else if (r !== 'ok') noteFail(id, r);
+            const skippedBefore = tally.skipped;
+            const r = await tryApply(it.id);
+            if (r === 'notloaded') {
+                const m = 'non caricato neppure dopo lo spostamento (se hai salvato di recente l\'id potrebbe essere cambiato: ricatturalo)';
+                noteFail(it.id, m, false);
+                recSeg(it.id, 'errore', m, it.before);
+            } else {
+                if (r !== 'ok') noteFail(it.id, r);
+                recSeg(it.id, esitoDi(r, skippedBefore), r === 'ok' ? '' : r, it.before);
+            }
         }
     }
 
@@ -3488,35 +3504,49 @@
                 cleanMode: askStaleCleanup(ids, staleOf), tally
             });
 
-            const notLoaded = [];
-            let k = 0;
-            for (const id of ids) {
-                k++;
-                if (ids.length > 3) status(`Applico: ${k}/${ids.length}\u2026`);
-                if (k % 6 === 0) await tick();
-                const before = (() => { try { const st = segAddressState(id); return st.pn != null ? streetLabel(st.pn) : '(senza strada)'; } catch { return ''; } })();
-                const skippedBefore = tally.skipped;
-                const r = await tryApply(id);
-                if (r === 'notloaded') notLoaded.push(id);
-                else if (r !== 'ok') noteFail(id, r);
+            // Registra l'esito di un segmento. Il segmento non ancora caricato non produce
+            // nessuna riga: si aspetta il recupero, e nel registro finisce solo com'e' finita.
+            const recSeg = (id, esito, motivo, before) => {
+                if (esito === 'rimandato') return;
                 const mid = (() => {
                     const c = (captured.get(id) && captured.get(id).coords) || segGeometry(id);
                     return c && c.length ? lineMidpoint(c) : null;
                 })();
                 logEvent('segmento', {
-                    esito: r === 'ok' ? (tally.skipped > skippedBefore ? 'gia_a_posto' : 'modificato') : (r === 'notloaded' ? 'rimandato' : 'errore'),
-                    motivo: (r === 'ok' || r === 'notloaded') ? '' : r,
+                    esito,
+                    motivo: motivo || '',
                     comune: cityName || '',
                     odonimo: streetName,
                     segmento: String(id),
                     permalink: mid ? permalink(mid[0], mid[1], id, 17) : permalink(null, null, id),
                     lat: mid ? Number(mid[1].toFixed(7)) : '',
                     lon: mid ? Number(mid[0].toFixed(7)) : '',
-                    prima: before,
+                    prima: before || '',
                     dopo: extra ? `${streetName} (PN citt\u00e0 Nessuno) + AN ${streetName}, ${cityName}` : `${streetName}, ${cityName}`
                 });
+            };
+            const esitoDi = (r, skippedBefore) =>
+                r === 'ok' ? (tally.skipped > skippedBefore ? 'gia_a_posto' : 'modificato')
+                    : (r === 'notloaded' ? 'rimandato' : 'errore');
+            const nomePrima = id => {
+                try { const st = segAddressState(id); return st.pn != null ? streetLabel(st.pn) : '(senza strada)'; }
+                catch { return ''; }
+            };
+
+            const notLoaded = [];
+            let k = 0;
+            for (const id of ids) {
+                k++;
+                if (ids.length > 3) status(`Applico: ${k}/${ids.length}\u2026`);
+                if (k % 6 === 0) await tick();
+                const before = nomePrima(id);
+                const skippedBefore = tally.skipped;
+                const r = await tryApply(id);
+                if (r === 'notloaded') { notLoaded.push({ id, before }); continue; }
+                if (r !== 'ok') noteFail(id, r);
+                recSeg(id, esitoDi(r, skippedBefore), r === 'ok' ? '' : r, before);
             }
-            if (notLoaded.length) await retryOffscreenSegments(notLoaded, tryApply, noteFail);
+            if (notLoaded.length) await retryOffscreenSegments(notLoaded, tryApply, noteFail, recSeg, esitoDi, tally);
             status('');
 
             lastFailedIds = new Set(failReasons.keys());
