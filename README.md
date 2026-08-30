@@ -76,7 +76,7 @@ si disegna niente sulla mappa.
 | Editor aperto a lungo | ricontrollo automatico ogni **30 minuti** |
 | Abilitazione revocata mentre lavori | chiusura immediata: lista svuotata, civici rimossi dalla mappa, pannello 401 |
 | Foglio non raggiungibile | se poco prima eri abilitato si continua per un massimo di **72 ore** di tolleranza; in caso di dubbio non si apre |
-| Versione minima imposta dai coordinatori | se la tua è più vecchia il pannello mostra **"Aggiornamento necessario"** e blocca tutto finché non aggiorni |
+| Versione minima imposta dallo sviluppatore | se la tua è più vecchia il pannello mostra **"Aggiornamento necessario"** e blocca tutto finché non aggiorni |
 
 **Per farti abilitare** scrivi ai coordinatori della community italiana di Waze oppure all'autore su
 Slack (`@checcoconf`). Il link diretto è nel pannello, in fondo e nella schermata 401.
