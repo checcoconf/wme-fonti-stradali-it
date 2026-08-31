@@ -387,7 +387,8 @@ un raggio troppo largo fa comparire odonimi che con il tuo segmento non c'entran
 - Lo script modifica **solo ciò che differisce**, salta ciò che è già a posto e lavora a piccoli lotti:
   **rivedi sempre l'elenco modifiche prima di salvare**.
 - I dati ANNCSU sono open data **CC-BY 4.0**: riutilizzabili anche su Waze, purché sia citata la fonte.
-In Italia la georeferenziazione dei civici è ancora in corso: l'assenza di un civico in ANNCSU non significa che non esista sul territorio. ➡️ [Consulta i miei report automatici mensili sulla banca dati](https://github.com/checcoconf/anncsu-report/releases/latest)
+- In Italia la georeferenziazione dei civici è ancora in corso: l'assenza di un civico in ANNCSU non significa che non esista sul territorio.
+<br> ➡️ [Consulta i miei report automatici mensili sulla banca dati](https://github.com/checcoconf/anncsu-report/releases/latest) </br>
 
 ---
 
