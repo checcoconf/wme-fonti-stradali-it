@@ -384,38 +384,12 @@ un raggio troppo largo fa comparire odonimi che con il tuo segmento non c'entran
 
 ---
 
-## Registro delle modifiche
-
-Lo script tiene un registro delle sole operazioni che **cambiano davvero la mappa e vengono salvate**.
-Errori, duplicati, "già a posto" e scarichi di dati **non** lasciano traccia: li vedi nel riepilogo a
-schermo, non nell'archivio.
-
-Una riga resta *in sospeso* finché non salvi nell'editor: se ricarichi la pagina senza salvare, le
-modifiche non esistono più e le loro righe se ne vanno con loro. Se annulli tutto, vengono scartate.
-
-I dati registrati sono quelli già pubblici dell'attività di editing: nome utente WME, livello,
-versione dello script, sessione, odonimo, comune, civico, segmento, permalink e coordinate della
-modifica.
-
----
-
 ## Note per gli editor
 
 - Lo script modifica **solo ciò che differisce**, salta ciò che è già a posto e lavora a piccoli lotti:
   **rivedi sempre l'elenco modifiche prima di salvare**.
 - I dati ANNCSU sono open data **CC-BY 4.0**: riutilizzabili anche su Waze, purché sia citata la fonte.
 In Italia la georeferenziazione dei civici è ancora in corso: l'assenza di un civico in ANNCSU non significa che non esista sul territorio. ➡️ [Consulta i miei report automatici mensili sulla banca dati](https://github.com/checcoconf/anncsu-report/releases/latest)
-
----
-
-## Sviluppo e rilasci
-
-- Lo script vive in `wme-fonti-stradali-it.user.js` (root del repo).
-- Il versionamento è **manuale**: alza la riga `// @version` nello script (es. `0.1.4` → `0.1.5`) e fai
-  push su `main`: la CI pubblica la release `v<versione>`. Se fai push senza alzare la versione, non
-  viene pubblicato nulla.
-- Il file `.meta.js` è generato dalla CI: **non** va committato.
-- Le immagini della documentazione stanno in `docs/img/`.
 
 ---
 
