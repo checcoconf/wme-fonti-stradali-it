@@ -26,9 +26,7 @@ Creato da **checcoconf** · dati: ANNCSU, open data con licenza [CC-BY 4.0](http
 - [6 · Inserimento dei numeri civici](#6--inserimento-dei-numeri-civici)
 - [Come funzionano gli accessi ANNCSU](#come-funzionano-gli-accessi-anncsu)
 - [Errori e cosa fare](#errori-e-cosa-fare)
-- [Registro delle modifiche](#registro-delle-modifiche)
 - [Note per gli editor](#note-per-gli-editor)
-- [Sviluppo e rilasci](#sviluppo-e-rilasci)
 - [Licenza](#licenza)
 
 ---
