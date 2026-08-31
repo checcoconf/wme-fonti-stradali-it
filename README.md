@@ -78,8 +78,7 @@ si disegna niente sulla mappa.
 | Foglio non raggiungibile | se poco prima eri abilitato si continua per un massimo di **72 ore** di tolleranza; in caso di dubbio non si apre |
 | Versione minima imposta dallo sviluppatore | se la tua è più vecchia il pannello mostra **"Aggiornamento necessario"** e blocca tutto finché non aggiorni |
 
-**Per farti abilitare** scrivi ai coordinatori della community italiana di Waze oppure all'autore su
-Slack (`@checcoconf`). Il link diretto è nel pannello, in fondo e nella schermata 401.
+**Per farti abilitare** scrivi ai coordinatori della community italiana di Waze. Il link diretto è nel pannello, in fondo e nella schermata 401.
 
 ---
 
@@ -405,10 +404,7 @@ modifica.
 - Lo script modifica **solo ciò che differisce**, salta ciò che è già a posto e lavora a piccoli lotti:
   **rivedi sempre l'elenco modifiche prima di salvare**.
 - I dati ANNCSU sono open data **CC-BY 4.0**: riutilizzabili anche su Waze, purché sia citata la fonte.
-- Verifica l'ammissibilità della fonte con i coordinatori della community italiana prima di usarlo su
-  larga scala.
-- In Italia la georeferenziazione dei civici è ancora in corso: l'assenza di un civico in ANNCSU non
-  significa che non esista sul territorio.
+In Italia la georeferenziazione dei civici è ancora in corso: l'assenza di un civico in ANNCSU non significa che non esista sul territorio. ➡️ [Consulta i miei report automatici mensili sulla banca dati](https://github.com/checcoconf/anncsu-report/releases/latest)
 
 ---
 
@@ -430,4 +426,4 @@ MIT — vedi [LICENSE](LICENSE).
 Dati: [ANNCSU](https://www.anncsu.gov.it/it/) (Istat / Agenzia delle Entrate), open data con licenza
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.it).
 
-💬 Info, idee o problemi? Scrivimi su **Slack**: `@checcoconf` (workspace della community italiana Waze).
+💬 Info, idee o problemi? Scrivimi su **Slack**: [`@checcoconf`](https://slack.com/app_redirect?channel=U0BHX22AFHS) (workspace della community italiana Waze).
