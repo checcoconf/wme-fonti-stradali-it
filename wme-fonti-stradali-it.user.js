@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.2.0
+// @version      0.2.1
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       checcoconf
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
@@ -85,12 +85,16 @@
     const GAS_URL = 'https://script.google.com/macros/s/AKfycbyqY5rbcjPdShWcFFmBBc6P-wZmgL0Vn4t4ya_jqwGnR7iO9rVHTZ_f1zfzFj1TDftNSA/exec'; // es. https://script.google.com/macros/s/AKfy.../exec
     const GAS_TOKEN = '1aa4f7f7330e4164bc8cc4ef3a5ea9886892ebc1'; // stringa lunga a caso, uguale a quella su Apps Script
 
-    const DOWNLOAD_URL = 'https://github.com/checcoconf/wme-fonti-stradali-it/releases/latest/download/wme-fonti-stradali-it.user.js';
     const AUTH_KEY = 'wmeFontiIT_auth_v1';
     const LOGQ_KEY = 'wmeFontiIT_logq_v1';
     const AUTH_TTL_H = 2;     // ogni quante ore si richiede di nuovo il permesso al foglio
     const AUTH_RECHECK_MIN = 30; // ricontrollo periodico mentre l'editor resta aperto
     const AUTH_GRACE_H = 72;  // se il foglio non risponde, per quante ore vale l'ultimo "autorizzato"
+    // Apps Script parte a freddo e ci mette il suo: 20 secondi erano troppo pochi e
+    // facevano scadere la verifica a gente perfettamente abilitata.
+    const GAS_TIMEOUT_MS = 40000;
+    const GAS_TENTATIVI = 2;      // un secondo tentativo se cade la rete o scade il tempo
+    const GAS_ATTESA_MS = 2500;   // pausa fra un tentativo e l'altro
     const LOG_MAX_QUEUE = 2000;
 
     const REGIONI = [
@@ -283,9 +287,13 @@
         return `indirizzo non riconosciuto (letto: ${u.slice(0, 60)}\u2026).`;
     }
 
+    // Un guasto di rete non e' un rifiuto: lo marchiamo per poterlo distinguere piu' avanti
+    // e per sapere quando ha senso riprovare.
+    function erroreRete(msg) { const e = new Error(msg); e.rete = true; return e; }
+
     // Chiamata al Web App. Content-Type text/plain: Apps Script lo accetta e non scatena
     // preflight; il corpo resta comunque JSON.
-    function gasCall(payload, timeoutMs = 20000) {
+    function gasCall(payload, timeoutMs = GAS_TIMEOUT_MS) {
         return new Promise((resolve, reject) => {
             if (!gasConfigured()) { reject(new Error('web app non configurato')); return; }
             try {
@@ -302,11 +310,27 @@
                         catch { reject(new Error('risposta non leggibile dal foglio')); return; }
                         resolve(j);
                     },
-                    onerror: () => reject(new Error('rete non raggiungibile')),
-                    ontimeout: () => reject(new Error('nessuna risposta entro il tempo massimo'))
+                    onerror: () => reject(erroreRete('rete non raggiungibile')),
+                    ontimeout: () => reject(erroreRete('nessuna risposta entro il tempo massimo'))
                 });
             } catch (e) { reject(e); }
         });
+    }
+
+    // Solo per la verifica dell'abilitazione: se cade la rete o scade il tempo si riprova
+    // una volta. Sui log non si riprova, altrimenti si rischiano righe doppie sul foglio.
+    async function gasCallRipetuta(payload) {
+        let ultimo = null;
+        for (let i = 1; i <= GAS_TENTATIVI; i++) {
+            try { return await gasCall(payload); }
+            catch (e) {
+                ultimo = e;
+                if (!e.rete || i === GAS_TENTATIVI) break;
+                log(`foglio non raggiungibile (${e.message}): riprovo fra ${Math.round(GAS_ATTESA_MS / 1000)}s`);
+                await sleep(GAS_ATTESA_MS);
+            }
+        }
+        throw ultimo;
     }
 
     // Nome utente WME: prima l'SDK, poi il modello legacy
@@ -341,91 +365,101 @@
     function writeAuthCache(c) { try { localStorage.setItem(AUTH_KEY, JSON.stringify(c)); } catch { /* ignora */ } }
     function clearAuthCache() { try { localStorage.removeItem(AUTH_KEY); } catch { /* ignora */ } }
 
-    // Ritorna { ok, user, reason, ruolo, offline }
+    // Esiti possibili, da tenere ben separati:
+    //   ok: true    si lavora (eventualmente in tolleranza, se il foglio tace ma la cache regge)
+    //   code 401    il foglio ha risposto e ha detto di no: serve l'abilitazione
+    //   code 503    il foglio non ha risposto: non ne sappiamo niente, non e' colpa dell'utente
+    //   code 500    lo script e' configurato male: problema dell'autore, non dell'editor
     async function checkAuthorization(force) {
         const u = currentUser();
-        if (!u.name) return { ok: false, code: 401, user: '', reason: 'non riesco a leggere il tuo nome utente Waze: ricarica l\'editor e riprova.' };
+        if (!u.name) return { ok: false, code: 503, user: '', reason: 'non riesco a leggere il tuo nome utente Waze: ricarica l\'editor e riprova.' };
         if (!gasConfigured()) {
-            return { ok: false, code: 401, user: u.name, reason: gasConfigProblema() };
+            return { ok: false, code: 500, user: u.name, reason: gasConfigProblema() };
         }
         if (!gasToken() || /^INCOLLA/i.test(gasToken())) {
-            return { ok: false, code: 401, user: u.name, reason: 'la riga GAS_TOKEN e\' ancora quella di esempio: incolla il token stampato da setup() sul foglio.' };
+            return { ok: false, code: 500, user: u.name, reason: 'la riga GAS_TOKEN e\' ancora quella di esempio: incolla il token stampato da setup() sul foglio.' };
         }
         const cached = readAuthCache(u.name);
         if (!force && cached && cached.ok && Date.now() - cached.ts < AUTH_TTL_H * 3600000) {
-            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota, versioneMin: cached.versioneMin, cached: true };
+            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota, cached: true };
         }
         try {
-            const r = await gasCall({ action: 'auth', user: u.name, rank: u.rank, livello: livelloDaRank(u.rank), userId: u.id, sessione: SESSION_ID });
+            const r = await gasCallRipetuta({ action: 'auth', user: u.name, rank: u.rank, livello: livelloDaRank(u.rank), userId: u.id, sessione: SESSION_ID });
             const ok = !!(r && r.ok && r.autorizzato);
-            writeAuthCache({ user: u.name, ok, ts: Date.now(), ruolo: r && r.ruolo, nota: r && r.nota, versioneMin: r && r.versioneMin });
-            if (ok) return { ok: true, user: u.name, ruolo: r.ruolo, nota: r.nota, versioneMin: r.versioneMin };
+            writeAuthCache({ user: u.name, ok, ts: Date.now(), ruolo: r && r.ruolo, nota: r && r.nota });
+            if (ok) return { ok: true, user: u.name, ruolo: r.ruolo, nota: r.nota };
             return { ok: false, code: 401, user: u.name, reason: (r && (r.messaggio || r.motivo)) || 'utente non presente nell\'elenco degli abilitati.' };
         } catch (e) {
             // Il foglio non risponde: se poco fa eri abilitato si continua per un periodo di
-            // tolleranza, altrimenti si resta chiusi (in caso di dubbio non si apre).
+            // tolleranza. Scaduta quella si chiude, ma dicendo la verita': non sappiamo,
+            // non "non sei abilitato".
             if (cached && cached.ok && Date.now() - cached.ts < AUTH_GRACE_H * 3600000) {
                 return { ok: true, user: u.name, ruolo: cached.ruolo, offline: true, reason: e.message };
             }
-            return { ok: false, code: 401, user: u.name, reason: 'non riesco a verificare l\'abilitazione (' + e.message + ').' };
+            return { ok: false, code: 503, user: u.name, reason: e.message };
         }
     }
 
-    // Confronta 0.2.10 e 0.3.0 come si deve: -1 se a e' precedente a b
-    function confrontaVersioni(a, b) {
-        const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
-        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-            const x = pa[i] || 0, y = pb[i] || 0;
-            if (x !== y) return x < y ? -1 : 1;
-        }
-        return 0;
-    }
+    // Un timeout non e' un rifiuto: chi non e' stato verificato non va mandato dai
+    // coordinatori, perche' loro non possono farci niente.
+    function bloccoHtml(info) {
+        const code = info.code || 503;
+        const testa = `
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>`;
+        const utente = `<p><b>Utente Waze:</b> ${escapeHtml(info.user || 'sconosciuto')}</p>`;
+        const dettaglio = info.reason ? `<p class="wfit-muted">Dettaglio: ${escapeHtml(info.reason)}</p>` : '';
 
-    // Versione troppo vecchia: si blocca e si manda ad aggiornare. Serve quando una
-    // versione ha un difetto che sporca la mappa o il registro.
-    function renderAggiorna(minima) {
-        if (!panelEl) return;
-        panelEl.innerHTML = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
-  <div class="wfit-sec wfit-401">
-    <div class="wfit-401code">Aggiornamento necessario</div>
-    <p>Stai usando la versione <b>${VERSION}</b>, ma i coordinatori richiedono almeno la <b>${escapeHtml(String(minima))}</b>.</p>
-    <p>Apri il link qui sotto: Tampermonkey propone l'aggiornamento, poi ricarica il WME.</p>
+        if (code === 401) {
+            return testa + `
+  <div class="wfit-sec wfit-bloc wfit-bloc-no">
+    <div class="wfit-bloccode">Abilitazione non presente</div>
+    ${utente}
+    <p>Questo script &egrave; riservato agli editor abilitati, e il tuo nome non risulta nell'elenco.</p>
+    ${dettaglio}
     <div class="wfit-row">
-      <a class="wfit-btn wfit-primary" href="${DOWNLOAD_URL}" target="_blank" rel="noopener">Aggiorna adesso</a>
-    </div>
-    <p class="wfit-muted">In alternativa: Tampermonkey &rarr; Utility &rarr; Controlla aggiornamenti degli userscript.</p>
-  </div>`;
-        log(`versione ${VERSION} troppo vecchia: richiesta almeno la ${minima}`);
-    }
-
-    function deniedHtml(info) {
-        return `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
-  <div class="wfit-sec wfit-401">
-    <div class="wfit-401code">401 Unauthorized</div>
-    <p><b>Utente Waze:</b> ${escapeHtml(info.user || 'sconosciuto')}</p>
-    <p>Questo script &egrave; riservato agli editor abilitati. <b>Contattare i coordinatori per l'abilitazione.</b></p>
-    <p class="wfit-muted">Dettaglio: ${escapeHtml(info.reason || '')}</p>
-    <div class="wfit-row">
-      <button class="wfit-btn wfit-primary" id="wfit-401-retry">Ho ricevuto l'abilitazione: ricontrolla</button>
+      <button class="wfit-btn wfit-primary" id="wfit-auth-retry">Ho ricevuto l'abilitazione: ricontrolla</button>
     </div>
     <p class="wfit-muted">Per l'abilitazione scrivi ai coordinatori della community italiana o all'autore ${slackLink()}.</p>
   </div>`;
+        }
+        if (code === 500) {
+            return testa + `
+  <div class="wfit-sec wfit-bloc wfit-bloc-no">
+    <div class="wfit-bloccode">Script configurato male</div>
+    ${utente}
+    <p>Non &egrave; un problema tuo n&eacute; della tua abilitazione: manca o &egrave; sbagliata una riga di configurazione dello script.</p>
+    ${dettaglio}
+    <p class="wfit-muted">Segnalalo all'autore ${slackLink()}: i coordinatori non possono risolverlo.</p>
+  </div>`;
+        }
+        return testa + `
+  <div class="wfit-sec wfit-bloc wfit-bloc-forse">
+    <div class="wfit-bloccode">Verifica non riuscita</div>
+    ${utente}
+    <p>Non sono riuscito a raggiungere il foglio delle abilitazioni, quindi <b>non so</b> se sei abilitato: non &egrave; detto che tu non lo sia.</p>
+    ${dettaglio}
+    <p>Di solito &egrave; passeggero. Riprova fra qualche minuto, o ricarica il WME.</p>
+    <div class="wfit-row">
+      <button class="wfit-btn wfit-primary" id="wfit-auth-retry">Riprova</button>
+    </div>
+    <p class="wfit-muted">Se va avanti per ore, segnalalo all'autore ${slackLink()}: scrivere ai coordinatori non serve, l'elenco non c'entra.</p>`
+            + `</div>`;
     }
 
-    function renderDenied(info) {
+    function renderBlocked(info) {
         if (!panelEl) return;
-        panelEl.innerHTML = deniedHtml(info);
-        const b = panelEl.querySelector('#wfit-401-retry');
+        panelEl.innerHTML = bloccoHtml(info);
+        const b = panelEl.querySelector('#wfit-auth-retry');
         if (b) b.addEventListener('click', async () => {
             b.disabled = true; b.textContent = 'Controllo in corso\u2026';
-            clearAuthCache();
+            // La cache si butta solo dopo un no esplicito: se e' stato un guasto di rete
+            // quella copia e' l'unica cosa che tiene in piedi la tolleranza.
+            if (info.code === 401) clearAuthCache();
             const r = await checkAuthorization(true);
             if (r.ok) { authInfo = r; startFeatures(); }
-            else { renderDenied(r); }
+            else { renderBlocked(r); }
         });
-        log('accesso negato:', info.reason);
+        log(`bloccato (${info.code || 503}):`, info.reason);
     }
 
     /* ------------------- permalink e segmento di un punto ------------------- */
@@ -646,7 +680,7 @@
             // il foglio risponde SEMPRE anche con lo stato di abilitazione: se nel frattempo
             // l'utente e' stato tolto dall'elenco, lo script si chiude subito
             if (r && r.autorizzato === false) {
-                lockDown((r.messaggio || 'abilitazione revocata dai coordinatori.'));
+                lockDown(r.messaggio || 'abilitazione revocata dai coordinatori.', 401);
                 return;
             }
         } catch (e) {
@@ -665,28 +699,23 @@
     async function controllaAbilitazione() {
         if (!authInfo.ok) return;
         const c = await checkAuthorization(true);
-        if (!c.ok) { lockDown(c.reason); return; }
-        if (c.versioneMin && confrontaVersioni(VERSION, c.versioneMin) < 0) {
-            authInfo = { ok: false, user: c.user, reason: 'versione troppo vecchia', code: 426 };
-            pendingLog = [];
-            captured.clear();
-            try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
-            try { sdk.Events.off({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); } catch { /* ignora */ }
-            renderAggiorna(c.versioneMin);
-        }
+        if (!c.ok) lockDown(c.reason, c.code);
     }
 
-    // Chiusura immediata: l'abilitazione e' stata tolta mentre l'editor era aperto
-    function lockDown(reason) {
+    // Chiusura immediata mentre l'editor e' aperto. Il codice dice perche': 401 se
+    // l'abilitazione e' stata tolta, 503 se il foglio non risponde da piu' del periodo
+    // di tolleranza. Nel secondo caso la cache NON si tocca: e' l'unica cosa che
+    // rimetterebbe in piedi la tolleranza al prossimo avvio.
+    function lockDown(reason, code) {
         if (!authInfo.ok) return;
         const user = authInfo.user;
-        authInfo = { ok: false, user, reason, code: 401 };
-        clearAuthCache();
+        authInfo = { ok: false, user, reason, code: code || 401 };
+        if (authInfo.code === 401) clearAuthCache();
         captured.clear();
         pendingLog = [];
         try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
         try { sdk.Events.off({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); } catch { /* ignora */ }
-        renderDenied(authInfo);
+        renderBlocked(authInfo);
     }
 
     /* ------------------------------------------------------------------ */
@@ -712,11 +741,7 @@
 
         const r = await checkAuthorization(false);
         authInfo = r;
-        if (!r.ok) { renderDenied(r); return; }   // niente cattura, niente dati, niente civici
-        if (r.versioneMin && confrontaVersioni(VERSION, r.versioneMin) < 0) {
-            renderAggiorna(r.versioneMin);
-            return;
-        }
+        if (!r.ok) { renderBlocked(r); return; }   // niente cattura, niente dati, niente civici
         const u = currentUser();
         authInfo.rank = u.rank;
         log(`utente ${r.user} autorizzato${r.ruolo ? ' (' + r.ruolo + ')' : ''}${r.offline ? ' - in tolleranza, foglio non raggiungibile' : ''}`);
@@ -883,9 +908,13 @@
     const LOGO_SVG = logoSvg(18, 4);
 
     const CSS = `
-#wfit-panel .wfit-401 { border:1px solid #e2b4b4; background:#fdf3f3; border-radius:8px; }
-#wfit-panel .wfit-401code { font-weight:700; font-size:15px; color:#a5232f; letter-spacing:.5px; margin-bottom:6px; }
-#wfit-panel .wfit-401 p { margin:6px 0; }
+#wfit-panel .wfit-bloc { border-radius:8px; }
+#wfit-panel .wfit-bloc p { margin:6px 0; }
+#wfit-panel .wfit-bloccode { font-weight:700; font-size:15px; letter-spacing:.5px; margin-bottom:6px; }
+#wfit-panel .wfit-bloc-no { border:1px solid #e2b4b4; background:#fdf3f3; }
+#wfit-panel .wfit-bloc-no .wfit-bloccode { color:#a5232f; }
+#wfit-panel .wfit-bloc-forse { border:1px solid #e4cf9a; background:#fdf9ef; }
+#wfit-panel .wfit-bloc-forse .wfit-bloccode { color:#8a6316; }
 #wfit-panel { --wg:#009246; --ww:#f4f4f2; --wr:#ce2b37; --blu:#0b5ed7; --ink:#22262c; font-size:12px; color:var(--ink);
   container-type:inline-size; max-width:100%; overflow-x:hidden; padding:4px 10px 18px; }
 #wfit-panel, #wfit-panel * { box-sizing:border-box; }
@@ -2592,7 +2621,7 @@
     // non e' raggiungibile.
     const ODONIMI_FALLBACK = {
         abbreviazioni: { diramazione: 'Dir', diramazioni: 'Dir', diramaz: 'Dir', diram: 'Dir' },
-        minuscole: ['di', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dallo', 'dalla', 'dai', 'dagli', 'dalle', 'de', 'd', 'la', 'le', 'lo', 'li', 'e', 'ed', 'a', 'ad', 'al', 'allo', 'alla', 'ai', 'agli', 'alle', 'in', 'nel', 'nello', 'nella', 'nei', 'negli', 'nelle', 'su', 'sul', 'sulla', 'sui', 'sugli', 'sulle', 'con', 'col', 'per', 'tra', 'fra', 'un', 'uno', 'una'],
+        minuscole: ['il', 'lo', 'la', 'i', 'gli', 'le', 'di', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dallo', 'dalla', 'dai', 'dagli', 'dalle', 'de', 'd', 'li', 'e', 'ed', 'a', 'ad', 'al', 'allo', 'alla', 'ai', 'agli', 'alle', 'in', 'nel', 'nello', 'nella', 'nei', 'negli', 'nelle', 'su', 'sul', 'sulla', 'sui', 'sugli', 'sulle', 'con', 'col', 'per', 'tra', 'fra', 'un', 'uno', 'una'],
         particelleCognome: ['di', 'de', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dalla', 'dalle', 'la', 'lo', 'li'],
         cognomiConParticella: ['de amicis', 'de gasperi', 'de nicola', 'de sanctis', 'de sica', 'della chiesa', 'dalla chiesa', 'di giacomo', 'di pietro', 'di vittorio', 'la malfa', 'lo bianco'],
         euristicaCognome: true,
@@ -2601,6 +2630,7 @@
         toponimiReligiosi: ['san', 'santa', 'santo', 'sant', 'ss', 'madonna', 'nostra', 'signora', 'beata', 'beato', 'chiesa', 'cappella', 'santuario', 'convento', 'abbazia', 'pieve'],
         romaniAmbigui: ['c', 'd', 'i', 'l', 'm', 'v', 'x', 'ci', 'di', 'li', 'mi', 'vi'],
         contestoRomanoPrima: ['papa', 'pio', 'giovanni', 'paolo', 'leone', 'benedetto', 'gregorio', 'clemente', 'sisto', 'urbano', 'vittorio', 'emanuele', 'umberto', 'carlo', 'luigi', 'federico', 'enrico', 'ferdinando', 're', 'regina', 'traversa', 'parallela', 'lotto'],
+        romanoMaxAmbiguo: 10,
         contestoRomanoDopo: ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'],
         nomiPropri: ['alcide', 'antonio', 'carlo', 'cesare', 'francesco', 'giovanni', 'giuseppe', 'luigi', 'marco', 'mario', 'pietro', 'vittorio']
     };
@@ -2650,6 +2680,17 @@
         return !!core && /^[mdclxvi]+$/.test(core) && ROMAN.test(core.toUpperCase());
     }
 
+    const ROMAN_VAL = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+
+    function romanValue(core) {
+        let tot = 0;
+        for (let i = 0; i < core.length; i++) {
+            const v = ROMAN_VAL[core[i]];
+            tot += (v < (ROMAN_VAL[core[i + 1]] || 0)) ? -v : v;
+        }
+        return tot;
+    }
+
     // Nome pronto per Waze: maiuscole all'italiana + abbreviazioni (Diramazione -> Dir).
     // Le abbreviazioni valgono anche a Title Case spento: sono regole di nome, non di stile.
     function toWazeCase(s) {
@@ -2678,8 +2719,20 @@
             const rest = core.slice(i).filter(Boolean).join(' ');
             return list.some(e => rest === e || rest.startsWith(e + ' '));
         };
-        // un numero romano ambiguo (DI, VI, I...) vale come numero solo con il contesto giusto
-        const romanCtx = i => ODO_SET.prima.has(core[i - 1] || '') || ODO_SET.dopo.has(core[i + 1] || '');
+        // Un romano ambiguo (DI, VI, I...) vale come numero solo con il contesto giusto.
+        // Il tetto sul valore fa da primo filtro: DI = 501 e LI = 51 non sono numeri di
+        // traversa, sono la preposizione e l'articolo.
+        const romanOk = i => {
+            const c = core[i];
+            if (!isRoman(c)) return false;
+            if (!ODO_SET.ambigui.has(c)) return true;                 // II, IV, XXIII: nessun dubbio
+            // Negli odonimi i numeri restano piccoli: le traverse arrivano a una decina,
+            // i papi a XXIII. Un ambiguo che varrebbe 50, 100 o 501 non e' un numero:
+            // e' la parola italiana (DI = 501, LI = 51, MI = 1001, C = 100).
+            if (romanValue(c) > (ODO.romanoMaxAmbiguo || 10)) return false;
+            if (ODO_SET.dopo.has(core[i + 1] || '')) return true;     // VI Novembre
+            return ODO_SET.prima.has(core[i - 1] || '');              // Traversa VI, Pio VI
+        };
         // "Giuseppe Di Vittorio" si', "Madonna delle Grazie" no
         const isCognome = i => {
             const c = core[i];
@@ -2691,7 +2744,8 @@
             if (!next || ODO_SET.minuscole.has(next)) return false;
             if (core.slice(0, i).some(w => ODO_SET.religiosi.has(w))) return false;
             const prev = core[i - 1] || '';
-            return ODO_SET.nomi.has(prev) || /^[a-z]$/.test(prev);   // nome di persona o iniziale
+            const prevIniziale = prev.length === 1 && parts[i - 1].post.indexOf('.') >= 0;
+            return ODO_SET.nomi.has(prev) || prevIniziale;           // nome di persona o iniziale puntata
         };
 
         return parts.map((p, i) => {
@@ -2699,7 +2753,7 @@
             const c = core[i];
             // iniziale puntata: "A. De Gasperi", "G. Marconi"
             if (c.length === 1 && p.post.indexOf('.') >= 0) return p.pre + p.core.toUpperCase() + p.post;
-            if (isRoman(c) && (!ODO_SET.ambigui.has(c) || romanCtx(i))) return p.pre + p.core.toUpperCase() + p.post;
+            if (romanOk(i)) return p.pre + p.core.toUpperCase() + p.post;
             if (i > 0 && ODO_SET.minuscole.has(c)) {
                 const w = ODO_SET.particelle.has(c) && isCognome(i) ? capIt(low[i]) : low[i];
                 return p.pre + w + p.post;

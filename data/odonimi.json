@@ -11,8 +11,8 @@
   "diram": "Dir"
 },
 
-"_note_minuscole": "Parole che restano minuscole quando non sono la prima dell'odonimo.",
-"minuscole": ["di","del","dello","della","dei","degli","delle","da","dal","dallo","dalla","dai","dagli","dalle","de","d","la","le","lo","li","e","ed","a","ad","al","allo","alla","ai","agli","alle","in","nel","nello","nella","nei","negli","nelle","su","sul","sullo","sulla","sui","sugli","sulle","con","col","per","tra","fra","un","uno","una"],
+"_note_minuscole": "Articoli, preposizioni e congiunzioni: restano minuscoli quando non sono la prima parola dell'odonimo (regola Waze Italia: iniziali maiuscole a eccezione di articoli e congiunzioni).",
+"minuscole": ["il","lo","la","i","gli","le","di","del","dello","della","dei","degli","delle","da","dal","dallo","dalla","dai","dagli","dalle","de","d","la","le","lo","li","e","ed","a","ad","al","allo","alla","ai","agli","alle","in","nel","nello","nella","nei","negli","nelle","su","sul","sullo","sulla","sui","sugli","sulle","con","col","per","tra","fra","un","uno","una"],
 
 "_note_particelle": "Particelle che possono far parte di un cognome e quindi andare maiuscole.",
 "particelleCognome": ["di","de","del","dello","della","dei","degli","delle","da","dal","dalla","dalle","la","lo","li"],
@@ -40,6 +40,8 @@
 "_note_romani": "Token che sono numeri romani validi ma anche parole italiane: vanno maiuscoli solo con un contesto da numerale.",
 "romaniAmbigui": ["c","d","i","l","m","v","x","ci","di","li","mi","vi"],
 "contestoRomanoPrima": ["papa","pio","giovanni","paolo","leone","benedetto","gregorio","clemente","innocenzo","urbano","sisto","celestino","callisto","alessandro","adriano","onorio","stefano","silvestro","vittore","eugenio","marcello","nicola","pasquale","anastasio","giulio","martino","re","regina","imperatore","imperatrice","umberto","carlo","vittorio","emanuele","ferdinando","alfonso","federico","enrico","luigi","napoleone","amedeo","filippo","guglielmo","giorgio","elisabetta","ludovico","lodovico","traversa","traverse","parallela","trasversale","lotto","comparto","isolato","corte","vicolo","fila","braccio","ramo","legione","reggimento","battaglione","corpo","zona","strada"],
+"_note_tetto": "Negli odonimi i numeri sono piccoli (traverse fino a una decina, papi fino a XXIII). Sopra questo valore un romano ambiguo e' considerato parola, non numero: DI vale 501, LI 51, MI 1001, C 100.",
+"romanoMaxAmbiguo": 10,
 "contestoRomanoDopo": ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"],
 
 "_note_nomi": "Nomi di persona usati dall'euristica sui cognomi. Un token di una sola lettera seguito da punto (G., A.) vale come nome.",
