@@ -1,0 +1,47 @@
+{
+"formato": 1,
+"descrizione": "Regole di normalizzazione degli odonimi italiani usate da WME Fonti Stradali IT. E' un file di dati, non di codice: si corregge senza toccare lo script. Tutte le voci vanno scritte in minuscolo e senza accenti sulle maiuscole.",
+"aggiornato": "2026-09-09",
+
+"_note_abbreviazioni": "Parola per esteso -> forma abbreviata Waze. Applicata sempre, anche con il Title Case disattivato.",
+"abbreviazioni": {
+  "diramazione": "Dir",
+  "diramazioni": "Dir",
+  "diramaz": "Dir",
+  "diram": "Dir"
+},
+
+"_note_minuscole": "Parole che restano minuscole quando non sono la prima dell'odonimo.",
+"minuscole": ["di","del","dello","della","dei","degli","delle","da","dal","dallo","dalla","dai","dagli","dalle","de","d","la","le","lo","li","e","ed","a","ad","al","allo","alla","ai","agli","alle","in","nel","nello","nella","nei","negli","nelle","su","sul","sullo","sulla","sui","sugli","sulle","con","col","per","tra","fra","un","uno","una"],
+
+"_note_particelle": "Particelle che possono far parte di un cognome e quindi andare maiuscole.",
+"particelleCognome": ["di","de","del","dello","della","dei","degli","delle","da","dal","dalla","dalle","la","lo","li"],
+
+"_note_cognomi": "Cognomi con particella che vanno sempre maiuscoli (particella + parola successiva).",
+"cognomiConParticella": [
+  "de amicis","de andre","de bono","de bosis","de chirico","de curtis","de filippo","de gasperi","de giorgi","de gregori","de luca","de marchi","de martino","de nicola","de nittis","de pinedo","de roberto","de rossi","de sanctis","de santis","de sica","de vito","de zerbi",
+  "del monaco","del prete","del vecchio","della chiesa","della porta","della valle","dalla chiesa","dalla costa",
+  "di bartolo","di brazza","di cagno","di crollalanza","di giacomo","di giorgio","di giovanni","di giura","di lorenzo","di marzio","di michele","di nardo","di paolo","di pietro","di vagno","di vittorio",
+  "la farina","la malfa","la marmora","la masa","la pira","li causi","lo bianco","lo faro","lo presti","lo re"
+],
+
+"_note_euristica": "Se attiva, 'di'/'de' vanno maiuscole quando sono precedute da un nome di persona (es. Giuseppe Di Vittorio). Non si applica agli odonimi religiosi ne' alle eccezioni sotto.",
+"euristicaCognome": true,
+"particelleEuristica": ["di","de"],
+
+"eccezioniParticella": [
+  "di savoia","di borbone","di lorena","di baviera","di francia","di spagna","di gerusalemme","di sardegna","di napoli","di sicilia","di calabria","di rienzo","di loreto","di leuca","di dio","di gerace",
+  "dalle bande nere","delle bande nere","della francesca","della robbia","della quercia","dei mille"
+],
+
+"_note_religiosi": "Se una di queste parole compare prima della particella, l'euristica sui cognomi non si applica (es. Santa Maria di Leuca).",
+"toponimiReligiosi": ["san","santa","santo","sant","santi","ss","madonna","nostra","signora","beata","beato","chiesa","cappella","santuario","convento","abbazia","badia","pieve","parrocchia","monastero","eremo","crocifisso","immacolata","addolorata","annunziata","assunta"],
+
+"_note_romani": "Token che sono numeri romani validi ma anche parole italiane: vanno maiuscoli solo con un contesto da numerale.",
+"romaniAmbigui": ["c","d","i","l","m","v","x","ci","di","li","mi","vi"],
+"contestoRomanoPrima": ["papa","pio","giovanni","paolo","leone","benedetto","gregorio","clemente","innocenzo","urbano","sisto","celestino","callisto","alessandro","adriano","onorio","stefano","silvestro","vittore","eugenio","marcello","nicola","pasquale","anastasio","giulio","martino","re","regina","imperatore","imperatrice","umberto","carlo","vittorio","emanuele","ferdinando","alfonso","federico","enrico","luigi","napoleone","amedeo","filippo","guglielmo","giorgio","elisabetta","ludovico","lodovico","traversa","traverse","parallela","trasversale","lotto","comparto","isolato","corte","vicolo","fila","braccio","ramo","legione","reggimento","battaglione","corpo","zona","strada"],
+"contestoRomanoDopo": ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"],
+
+"_note_nomi": "Nomi di persona usati dall'euristica sui cognomi. Un token di una sola lettera seguito da punto (G., A.) vale come nome.",
+"nomiPropri": ["abramo","achille","ada","adelaide","adele","adolfo","adriana","adriano","agata","agnese","agostino","alba","alberico","alberto","albino","alcide","aldo","aleardo","alessandra","alessandro","alessio","alfonso","alfredo","alice","alighiero","amedeo","amerigo","amilcare","amos","andrea","angela","angelica","angelo","aniello","anna","annibale","antonella","antonello","antonietta","antonino","antonio","arcangelo","aristide","armando","arnaldo","arnolfo","arrigo","arturo","attilio","augusto","aurelia","aurelio","aurora","baldassarre","barbara","bartolo","bartolomeo","basilio","battista","beatrice","benedetta","benedetto","beniamino","benito","benvenuto","berardo","bernardino","bernardo","bettino","biagio","bonaventura","bonifacio","bruno","calogero","camilla","camillo","candida","carlo","carmela","carmelo","carmine","carola","carolina","caterina","cecilia","celeste","celestino","cesare","chiara","cipriano","ciro","clara","claudia","claudio","clelia","clemente","clotilde","concetta","corrado","cosimo","cosma","costantino","costanza","cristina","cristoforo","damiano","daniele","dante","dario","davide","dionigi","domenica","domenico","donatello","donato","dora","duccio","edgardo","edmondo","edoardo","efisio","egidio","elena","eleonora","elia","eligio","elio","elisa","elisabetta","eliseo","elvira","emanuela","emanuele","emidio","emilia","emiliano","emilio","enea","enrica","enrico","enzo","ercole","erminia","ermenegildo","ernesto","ettore","eugenia","eugenio","eusebio","eustachio","evaristo","ezio","fabio","fabrizio","faustino","fausto","fedele","federico","felice","ferdinando","fermo","fernando","ferruccio","filippo","filomena","fiorenzo","flaminio","flavia","flavio","fortunato","francesca","francesco","franco","fulvio","gabriele","gabriella","gaetano","galeazzo","galileo","gaspare","gastone","gavino","gemma","gennaro","gerardo","germano","gerolamo","giacinto","giacomo","giancarlo","gianfranco","gianluca","gianni","gino","gioacchino","giordano","giorgio","giosue","giotto","giovanna","giovanni","girolamo","giuditta","giulia","giuliano","giulietta","giulio","giuseppa","giuseppe","giustino","giusto","goffredo","graziano","gregorio","guglielmo","guido","gustavo","ida","ignazio","ilaria","ilario","ildebrando","innocenzo","ippolito","irene","isabella","isidoro","italo","ivo","jacopo","lamberto","lanfranco","laura","lauro","lazzaro","leandro","leonardo","leone","leonida","leopoldo","liberato","lidia","lino","livio","lodovico","lorenzo","luca","lucia","luciana","luciano","lucio","ludovico","luigi","luigia","luisa","maddalena","mafalda","manlio","marcantonio","marcello","marco","margherita","mariano","marina","mario","marta","martino","massimiliano","massimo","matilde","matteo","mattia","maurizio","mauro","melchiorre","michelangelo","michele","narciso","natale","nazario","nazzareno","nicola","nicolo","nino","norberto","olga","olindo","omero","onofrio","orazio","orlando","oreste","oronzo","orsola","osvaldo","ottavio","ottaviano","ottone","pancrazio","panfilo","paola","paolo","pasquale","patrizia","patrizio","pellegrino","pericle","pia","pier","pierluigi","piero","pietro","pio","placido","plinio","pompeo","primo","prospero","quintino","quirino","raffaele","raffaella","raimondo","ranieri","remo","renato","renzo","riccardo","rita","roberto","rocco","rodolfo","rolando","romano","romeo","romolo","rosa","rosalia","rosaria","rosario","rosolino","ruggero","ruggiero","sabino","salvatore","salvo","samuele","sandro","sara","saverio","sebastiano","secondo","serafino","sergio","severino","severo","silvano","silverio","silvestro","silvia","silvio","simone","sisto","sofia","spartaco","stefania","stefano","stanislao","tancredi","taddeo","teodoro","teresa","tiberio","tito","tiziano","tobia","tommaso","torquato","tullio","ubaldo","ugo","ugolino","ulisse","umberto","urbano","valentina","valentino","valeria","valerio","venanzio","vincenza","vincenzo","virgilio","virginia","vitale","vitaliano","vito","vittore","vittoria","vittorino","vittorio","zaccaria","zeno"]
+}

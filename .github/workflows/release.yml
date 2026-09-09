@@ -2,6 +2,10 @@
 # Versionamento MANUALE: la versione la decidi tu nella riga "// @version" dello script.
 # A ogni push su main la Action la legge: se quel numero non e' mai stato rilasciato,
 # pubblica la release v<versione>; se esiste gia', non fa nulla (alza @version per pubblicare).
+#
+# Nota sui file in data/: sono agganciati allo script con @resource e Tampermonkey li
+# riscarica quando lo script si aggiorna. Se correggi solo un JSON, alza comunque @version,
+# altrimenti chi ha gia' lo script installato continua a usare la copia vecchia.
 
 name: Release userscript
 
@@ -10,6 +14,7 @@ on:
     branches: [main]
     paths:
       - 'wme-fonti-stradali-it.user.js'
+      - 'data/**.json'
   workflow_dispatch:
 
 permissions:
@@ -46,6 +51,33 @@ jobs:
         if: steps.chk.outputs.exists == 'false'
         run: node --check wme-fonti-stradali-it.user.js
 
+      - name: Verifica i file dati (JSON valido + campi attesi)
+        if: steps.chk.outputs.exists == 'false'
+        run: |
+          node -e '
+            const fs = require("fs");
+            const c = JSON.parse(fs.readFileSync("data/comuni.json", "utf8"));
+            const n = Object.keys(c.comuni || {}).length;
+            if (n < 7000) throw new Error("data/comuni.json: solo " + n + " comuni");
+            for (const k of Object.keys(c.comuni)) {
+              if (!/^[A-Z]\d{3}$/.test(k)) throw new Error("codice catastale non valido: " + k);
+            }
+            const o = JSON.parse(fs.readFileSync("data/odonimi.json", "utf8"));
+            for (const campo of ["abbreviazioni", "minuscole", "particelleCognome", "romaniAmbigui"]) {
+              if (!o[campo]) throw new Error("data/odonimi.json: manca " + campo);
+            }
+            console.log("comuni: " + n + " \u00b7 odonimi: ok");
+          '
+
+      - name: Le risorse @resource puntano a file che esistono davvero?
+        if: steps.chk.outputs.exists == 'false'
+        run: |
+          grep -E "^// @resource" wme-fonti-stradali-it.user.js | awk '{print $4}' | while read -r U; do
+            F=${U##*/main/}
+            if [ ! -f "$F" ]; then echo "::error::@resource punta a $U ma $F non esiste nel repo"; exit 1; fi
+            echo "ok $F"
+          done
+
       - name: Genera il .meta.js (solo metadati, per il check aggiornamenti)
         if: steps.chk.outputs.exists == 'false'
         run: awk '/==UserScript==/,/==\/UserScript==/' wme-fonti-stradali-it.user.js > wme-fonti-stradali-it.meta.js
@@ -58,7 +90,8 @@ jobs:
           name: v${{ steps.ver.outputs.version }}
           body: |
             WME Fonti Stradali IT ${{ steps.ver.outputs.version }}.
-            Installa o aggiorna: https://github.com/${{ github.repository }}/releases/latest/download/wme-fonti-stradali-it.user.js
           files: |
             wme-fonti-stradali-it.user.js
             wme-fonti-stradali-it.meta.js
+            data/comuni.json
+            data/odonimi.json
