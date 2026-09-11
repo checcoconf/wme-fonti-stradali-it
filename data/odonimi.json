@@ -1,15 +1,31 @@
 {
 "formato": 1,
 "descrizione": "Regole di normalizzazione degli odonimi italiani usate da WME Fonti Stradali IT. E' un file di dati, non di codice: si corregge senza toccare lo script. Tutte le voci vanno scritte in minuscolo e senza accenti sulle maiuscole.",
-"aggiornato": "2026-09-09",
+"aggiornato": "2026-09-11",
 
-"_note_abbreviazioni": "Parola per esteso -> forma abbreviata Waze. Applicata sempre, anche con il Title Case disattivato.",
+"_note_abbreviazioni": "Parola per esteso -> forma abbreviata Waze. Applicata sempre, anche con il Title Case disattivato. Le forme devono essere quelle della tabella 'Abbreviazioni del TTS' della Wazeopedia Italia (dir, var, racc, circ, Cav.), scritte esattamente cosi' e senza punto: 'Dir.' il TTS lo legge 'direzione'. Se preferisci il nome per esteso (la guida Denominazione vuole i nomi ufficiali), togli la voce.",
 "abbreviazioni": {
-  "diramazione": "Dir",
-  "diramazioni": "Dir",
-  "diramaz": "Dir",
-  "diram": "Dir"
+  "diramazione": "dir",
+  "diramazioni": "dir",
+  "diramaz": "dir",
+  "diram": "dir"
 },
+
+"_note_espansioni": "Abbreviazioni puntate sciolte per esteso prima di tutto il resto (Wazeopedia Italia, Denominazione delle strade: nome per esteso, il TTS le punteggiate non le legge bene). Chiave in minuscolo con il punto, valore come va scritto. 'Cav.' non c'e' apposta: il TTS lo legge Cavaliere.",
+"espansioni": {
+  "mons.": "Monsignor", "dott.": "Dottor", "prof.": "Professor", "gen.": "Generale", "col.": "Colonnello",
+  "cap.": "Capitano", "ten.": "Tenente", "magg.": "Maggiore", "on.": "Onorevole", "avv.": "Avvocato",
+  "ing.": "Ingegner", "sen.": "Senatore", "card.": "Cardinale", "f.lli": "Fratelli", "c.da": "Contrada",
+  "c/da": "Contrada", "p.zza": "Piazza", "p.za": "Piazza", "v.le": "Viale", "l.go": "Largo", "c.so": "Corso",
+  "loc.": "Località", "fraz.": "Frazione", "str.": "Strada", "vic.": "Vicolo", "trav.": "Traversa",
+  "circ.": "Circonvallazione", "racc.": "Raccordo", "var.": "Variante"
+},
+
+"_note_elisioni": "Preposizioni e articoli elisi che restano minuscoli in mezzo al nome (Via dell'Arte, Contrada Lama d'Oro), come nella denominazione ISTAT dei comuni (Anzola dell'Emilia). 'd' diventa maiuscola solo nei cognomi (vedi sotto).",
+"elisioni": ["dell","dall","nell","sull","all","coll","degl","dagl","negl","sugl","agl","d","un"],
+
+"_note_cognomi_apostrofo": "Cognomi con d' che vanno sempre maiuscoli, anche senza il nome davanti (Via D'Azeglio). Con il nome davanti (Gabriele D'Annunzio) lo script lo capisce da solo.",
+"cognomiConApostrofo": ["d'annunzio","d'azeglio","d'acquisto","d'amico","d'angelo","d'alessandro","d'agostino","d'amato","d'onofrio"],
 
 "_note_minuscole": "Articoli, preposizioni e congiunzioni: restano minuscoli quando non sono la prima parola dell'odonimo (regola Waze Italia: iniziali maiuscole a eccezione di articoli e congiunzioni).",
 "minuscole": ["il","lo","la","i","gli","le","di","del","dello","della","dei","degli","delle","da","dal","dallo","dalla","dai","dagli","dalle","de","d","la","le","lo","li","e","ed","a","ad","al","allo","alla","ai","agli","alle","in","nel","nello","nella","nei","negli","nelle","su","sul","sullo","sulla","sui","sugli","sulle","con","col","per","tra","fra","un","uno","una"],
@@ -39,7 +55,7 @@
 
 "_note_romani": "Token che sono numeri romani validi ma anche parole italiane: vanno maiuscoli solo con un contesto da numerale.",
 "romaniAmbigui": ["c","d","i","l","m","v","x","ci","di","li","mi","vi"],
-"contestoRomanoPrima": ["papa","pio","giovanni","paolo","leone","benedetto","gregorio","clemente","innocenzo","urbano","sisto","celestino","callisto","alessandro","adriano","onorio","stefano","silvestro","vittore","eugenio","marcello","nicola","pasquale","anastasio","giulio","martino","re","regina","imperatore","imperatrice","umberto","carlo","vittorio","emanuele","ferdinando","alfonso","federico","enrico","luigi","napoleone","amedeo","filippo","guglielmo","giorgio","elisabetta","ludovico","lodovico","traversa","traverse","parallela","trasversale","lotto","comparto","isolato","corte","vicolo","fila","braccio","ramo","legione","reggimento","battaglione","corpo","zona","strada"],
+"contestoRomanoPrima": ["vico","papa","pio","giovanni","paolo","leone","benedetto","gregorio","clemente","innocenzo","urbano","sisto","celestino","callisto","alessandro","adriano","onorio","stefano","silvestro","vittore","eugenio","marcello","nicola","pasquale","anastasio","giulio","martino","re","regina","imperatore","imperatrice","umberto","carlo","vittorio","emanuele","ferdinando","alfonso","federico","enrico","luigi","napoleone","amedeo","filippo","guglielmo","giorgio","elisabetta","ludovico","lodovico","traversa","traverse","parallela","trasversale","lotto","comparto","isolato","corte","vicolo","fila","braccio","ramo","legione","reggimento","battaglione","corpo","zona","strada"],
 "_note_tetto": "Negli odonimi i numeri sono piccoli (traverse fino a una decina, papi fino a XXIII). Sopra questo valore un romano ambiguo e' considerato parola, non numero: DI vale 501, LI 51, MI 1001, C 100.",
 "romanoMaxAmbiguo": 10,
 "contestoRomanoDopo": ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"],
