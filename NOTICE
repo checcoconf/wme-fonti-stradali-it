@@ -1,0 +1,32 @@
+WME Fonti Stradali IT
+Copyright (C) 2026 Francesco Conforti (checcoconf)
+https://github.com/checcoconf/wme-fonti-stradali-it
+
+Questo progetto è software libero, rilasciato con licenza GNU General Public License
+versione 3 o successiva (GPL-3.0-or-later). Il testo completo è nel file LICENSE.
+
+Se usi, modifichi o ridistribuisci questo script, la licenza ti obbliga a:
+
+1. conservare questa nota e l'intestazione di copyright dentro i file;
+2. indicare in modo evidente che la tua è una versione modificata, da chi e quando;
+3. pubblicare il codice della tua versione con la stessa licenza (GPL-3.0-or-later);
+4. non far credere che la tua versione sia quella originale.
+
+Nome del progetto
+-----------------
+"WME Fonti Stradali IT" identifica il progetto originale dell'autore. La licenza copre il
+codice, non il nome: le versioni derivate devono usare un nome diverso ed evitare di
+confondere gli utenti sulla provenienza. Il riferimento al progetto originale ("basato su
+WME Fonti Stradali IT di Francesco Conforti") è invece gradito e corretto.
+
+Dati
+----
+I civici e gli odonimi provengono da ANNCSU (Archivio Nazionale dei Numeri Civici e delle
+Strade Urbane, Istat / Agenzia delle Entrate), open data con licenza CC-BY 4.0:
+https://creativecommons.org/licenses/by/4.0/deed.it
+L'elenco dei comuni proviene da Istat (Elenco comuni italiani).
+Questi dati restano dei rispettivi titolari e vanno citati quando li riutilizzi.
+
+Waze e Waze Map Editor sono marchi di Waze Mobile / Google. Questo progetto non è
+affiliato a Waze né a Google: è uno strumento indipendente creato dalla community
+italiana di editor.

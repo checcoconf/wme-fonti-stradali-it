@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.2.1
+// @version      0.3.0
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
-// @author       checcoconf
+// @author       Francesco Conforti (checcoconf)
+// @copyright    2026 Francesco Conforti
 // @homepageURL  https://github.com/checcoconf/wme-fonti-stradali-it
 // @supportURL   https://github.com/checcoconf/wme-fonti-stradali-it/issues
 // @updateURL    https://github.com/checcoconf/wme-fonti-stradali-it/releases/latest/download/wme-fonti-stradali-it.meta.js
@@ -27,10 +28,30 @@
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @run-at       document-end
-// @license      MIT
+// @license      GPL-3.0-or-later; https://www.gnu.org/licenses/gpl-3.0.txt
 // ==/UserScript==
 
 /* global getWmeSdk, GM_xmlhttpRequest, GM_getResourceText, GM_info */
+
+/*
+ * WME Fonti Stradali IT
+ * Copyright (C) 2026 Francesco Conforti (checcoconf)
+ *
+ * Questo programma e' software libero: puoi ridistribuirlo e/o modificarlo secondo i termini
+ * della GNU General Public License come pubblicata dalla Free Software Foundation, nella
+ * versione 3 della licenza o (a tua scelta) in una qualsiasi versione successiva.
+ *
+ * Il programma e' distribuito nella speranza che sia utile, ma SENZA ALCUNA GARANZIA, senza
+ * neppure la garanzia implicita di COMMERCIABILITA' o IDONEITA' A UNO SCOPO PARTICOLARE.
+ * Vedi la GNU General Public License per i dettagli: https://www.gnu.org/licenses/gpl-3.0.txt
+ *
+ * Se modifichi e ridistribuisci questo script devi: conservare questa nota di copyright,
+ * indicare in modo evidente che si tratta di una versione modificata e da chi, pubblicare il
+ * codice della tua versione con la stessa licenza, e usare un NOME DIVERSO dall'originale
+ * ("WME Fonti Stradali IT" identifica il progetto dell'autore, non i lavori derivati).
+ *
+ * Dati ANNCSU (Istat / Agenzia delle Entrate): open data con licenza CC-BY 4.0.
+ */
 
 (function () {
     'use strict';
@@ -67,6 +88,11 @@
     // Licenza degli open data ANNCSU (Istat / Agenzia delle Entrate)
     const LIC_NOME = 'CC-BY 4.0';
     const LIC_URL = 'https://creativecommons.org/licenses/by/4.0/deed.it';
+    // Licenza del codice dello script
+    const CODE_LIC = 'GPL-3.0-or-later';
+    const CODE_LIC_URL = 'https://www.gnu.org/licenses/gpl-3.0.html';
+    const AUTORE_FULL = 'Francesco Conforti';
+    const codeLicLink = () => `<a class="wfit-lic" href="${CODE_LIC_URL}" target="_blank" rel="noopener noreferrer" title="GNU General Public License v3 o successive: chi modifica e ridistribuisce lo script deve citare l'autore, dichiarare le modifiche e pubblicare il codice con la stessa licenza">${CODE_LIC}</a>`;
     const licLink = (txt) => `<a class="wfit-lic" href="${LIC_URL}" target="_blank" rel="noopener noreferrer" title="Creative Commons Attribuzione 4.0 Internazionale &ndash; testo della licenza">${txt || LIC_NOME}</a>`;
     // Guida completa del progetto (README su GitHub): qui nel pannello c'e' il riassunto,
     // le regole per esteso, gli esempi e la tabella degli errori stanno la'
@@ -105,9 +131,12 @@
         ['TREN', 'Trentino-Alto Adige'], ['UMBR', 'Umbria'], ['VALL', "Valle d'Aosta"], ['VENE', 'Veneto']
     ];
     const regNome = code => (REGIONI.find(r => r[0] === code) || [code, code])[1];
+    // Due livelli: i pallini dei civici (cliccabili: il clic evidenzia la riga nell'elenco) e
+    // l'evidenziazione dei segmenti in lista, che NON deve mai intercettare i clic: sotto c'e'
+    // il segmento del WME, e ALT+clic deve arrivarci per toglierlo dalla lista.
     const LAYER = 'wfit-civici';
+    const LAYER_HL = 'wfit-segmenti';
     const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#9a6324'];
-    // Elenco comuni italiani (fonte ISTAT) incorporato: "BELFIORE Nome|BELFIORE Nome|..."
     // Elenchi e regole stanno in file JSON dentro il repo (cartella data/), non incollati
     // qui dentro: sono dati, restano leggibili e correggibili senza rimettere mano al codice.
     // Tampermonkey li scarica una volta sola con lo script (@resource); se la risorsa manca
@@ -129,9 +158,13 @@
     let captured = new Map();         // segmentId -> {coords:[[lon,lat],...]}
     let lastFailedIds = new Set();    // segmenti su cui l'ultimo Applica e' fallito
     let lastResults = [];
-    let lastHNScan = { hn: 0, segs: 0 }; // esito dell'ultima lettura dei civici gia' su Waze
+    let lastHNScan = { hn: 0, segs: 0, rpp: 0, ok: true, come: '' }; // ultima lettura dei civici gia' su Waze
+    // Civici inseriti dallo script in questa sessione: finche' non salvi, il WME puo' non
+    // restituirli, e senza questa memoria tornerebbero nell'elenco come se mancassero.
+    let civiciInseriti = [];
     let lastPtsByG = new Map();       // gid -> [{lon,lat,label,d}] civici agganciati (deduplicati)
     let lastDotFeatures = [];         // ultime feature disegnate (per riaccendere la spunta al volo)
+    const dotIndex = new Map();       // id della feature -> { g, p }: serve al clic sul pallino
     let lastDupCount = 0;             // doppioni civici scartati nell'ultimo confronto
     let analyzeTimer = null;
     let busy = false;
@@ -143,22 +176,6 @@
     /* ------------------------------------------------------------------ */
     /* Utilita' di base                                                    */
     /* ------------------------------------------------------------------ */
-
-    // Il WME legacy vive su window.W (unsafeWindow sotto Tampermonkey): si legge una volta sola.
-    const WME = () => (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).W;
-    const WREQ = () => {
-        const w = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
-        return typeof w.require === 'function' ? w.require : (typeof require === 'function' ? require : null);
-    };
-
-    // Prima funzione che restituisce qualcosa di utile, saltando quelle che esplodono.
-    // E' il modo in cui lo script prova l'SDK e poi ripiega sul modello legacy del WME.
-    function firstOk(...fns) {
-        for (const fn of fns) {
-            try { const r = fn(); if (r != null && r !== false) return r; } catch { /* prossima */ }
-        }
-        return null;
-    }
 
     // Codici dei tasti modificatori: non sono ammessi come tasto di cattura personalizzato.
     // Sta qui in alto perche' normKeyChoice() la usa gia' durante la lettura delle impostazioni.
@@ -187,8 +204,10 @@
     };
     const dotSize = () => DOT_SIZES[settings.dotSize] || DOT_SIZES.normale;
 
+    const RAGGIO_MAX = 50;   // oltre i 45 m Waze rifiuta i civici: un raggio piu' largo non serve
+
     const DEFAULT_SETTINGS = {
-        raggio: 10, titleCase: true, captureMode: 'alt', applyMode: 'extra',
+        raggio: 10, titleCase: true, captureMode: 'alt', applyMode: 'extra', zonaSoloMie: true,
         autoAnalyze: true, showDots: true, dotSize: 'normale', hlColor: '#00e5ff', captureKey: null
     };
 
@@ -197,24 +216,24 @@
     function migrateSettings(s) {
         if (!Array.isArray(s.nameRules)) s.nameRules = [];
         if (!/^#[0-9a-f]{6}$/i.test(s.hlColor || '')) s.hlColor = '#00e5ff';
-        // MAIUSC e CTRL da soli erano scegliabili fino alla 0.0.5.b, poi sono stati tolti perche'
-        // il WME li usa per la multi-selezione: chi li aveva salvati passa alla combinazione libera.
-        if (s.captureMode === 'shift') s.captureMode = 'altshift';
-        if (s.captureMode === 'ctrl') s.captureMode = 'ctrlalt';
         // Tasto personalizzato: se il salvataggio e' rovinato o mancante si torna ad ALT (default di sempre)
         if (s.captureKey && typeof s.captureKey !== 'object') s.captureKey = null;
         // porta al formato attuale anche i tasti salvati dalla versione precedente (un tasto solo)
         s.captureKey = normKeyChoice(s.captureKey);
         if (s.captureMode === 'custom' && !s.captureKey) s.captureMode = 'alt';
         if (!s.applyMode) s.applyMode = 'extra';
-        // come trattare i civici in forma numero/numero (20/1, 20/2): 'nonins' (predefinito: restano
-        // in lista ma non vengono inseriti), 'includi' (civici normali), 'escludi' (fuori dalla lista)
-        if (!['nonins', 'includi', 'escludi'].includes(s.suspMode)) s.suspMode = 'nonins';
+        // civici in un formato che Waze non accetta (20/1, 12/BIS): 'nonins' (predefinito: restano
+        // in lista, senza spunta) o 'escludi' (fuori dalla lista). Dalla 0.2.2 non esiste piu'
+        // 'includi': Waze accetta solo numeri seguiti da al massimo due lettere minuscole.
+        if (!['nonins', 'escludi'].includes(s.suspMode)) s.suspMode = 'nonins';
         // Raggio: dalla 0.1.5 si parte da 10 m e il massimo scende a 1000 m. Chi aveva ancora
         // il vecchio predefinito (150) passa al nuovo, una volta sola: da li' in poi vale
         // sempre la tua scelta, anche se torni a 150.
         if (!s.raggioV2) { if (!(s.raggio > 0) || s.raggio === 150) s.raggio = DEFAULT_SETTINGS.raggio; s.raggioV2 = 1; }
-        s.raggio = Math.min(1000, Math.max(1, parseInt(s.raggio, 10) || DEFAULT_SETTINGS.raggio));
+        // Dalla 0.3.0 il massimo e' 50 m: oltre i 45 Waze rifiuta i civici, quindi un raggio
+        // piu' largo gonfiava solo i risultati. I valori salvati piu' grandi scendono a 50.
+        s.raggio = Math.min(RAGGIO_MAX, Math.max(1, parseInt(s.raggio, 10) || DEFAULT_SETTINGS.raggio));
+        s.zonaSoloMie = s.zonaSoloMie !== false;
         // Dimensione dei pallini sulla mappa: se il valore salvato non esiste piu', si torna a 'normale'
         if (!DOT_SIZES[s.dotSize]) s.dotSize = 'normale';
         return s;
@@ -333,21 +352,88 @@
         throw ultimo;
     }
 
-    // Nome utente WME: prima l'SDK, poi il modello legacy
+    // Tutto quello che lo script chiede all'SDK ufficiale del WME, con il perche'.
+    // Le versioni del WME non espongono sempre le stesse cose: all'avvio si controlla una per
+    // una e si scrive nel log cosa manca, cosi' un buco si vede subito (wfitDiag).
+    const SDK_NEEDS = [
+        ['State.getUserInfo', 'nome utente e livello', true],
+        ['Events.on', 'eventi (selezione, salvataggio)', true],
+        ['Sidebar.registerScriptTab', 'pannello nella barra laterale', true],
+        ['DataModel.Segments.getById', 'geometria e indirizzo dei segmenti', true],
+        ['DataModel.Segments.getAll', 'segmenti caricati (tutta la via, accessi)', true],
+        ['DataModel.Segments.getAddress', 'indirizzo attuale del segmento', true],
+        ['DataModel.Segments.updateAddress', 'Applica ai segmenti', true],
+        ['DataModel.Segments.addAlternateStreet', 'nome alternativo', false],
+        ['DataModel.Segments.updateSegment', 'obbligo fari accesi', false],
+        ['DataModel.Venues.addVenue', 'creazione dei luoghi residenziali (RPP)', false],
+        ['DataModel.Venues.updateAddress', 'via e civico dell\'RPP', false],
+        ['DataModel.Venues.updateVenueIsResidential', 'RPP contrassegnato come residenziale', false],
+        ['DataModel.Venues.replaceNavigationPoints', 'punto di arrivo dell\'RPP', false],
+        ['DataModel.Streets.getStreet', 'trova la via', true],
+        ['DataModel.Streets.addStreet', 'crea la via', true],
+        ['DataModel.Streets.getById', 'nome della via (sigle, riepiloghi)', true],
+        ['DataModel.Cities.getAll', 'citta\' e citta\' vuota "Nessuno"', true],
+        ['DataModel.Cities.getById', 'nome della citta\'', false],
+        ['DataModel.HouseNumbers.addHouseNumber', 'inserimento dei civici', true],
+        ['DataModel.HouseNumbers.getHouseNumbers', 'civici gia\' su Waze (doppioni)', true],
+        ['DataModel.Venues.getAll', 'luoghi residenziali (RPP)', false],
+        ['DataModel.Venues.getAddress', 'indirizzo dei luoghi residenziali', false],
+        ['Editing.getSelection', 'cattura dei segmenti', true],
+        ['Editing.clearSelection', 'chiusura del pannello del segmento', false],
+        ['Editing.setSelection', 'selezione dal pannello (e deselezione di riserva)', false],
+        ['Editing.getUnsavedChangesCount', 'blocco civici con modifiche non salvate', true],
+        ['Editing.isEditingAllowed', 'blocco in sola lettura', false],
+        ['Editing.isSnapshotModeOn', 'blocco in modalit\u00e0 snapshot', false],
+        ['Editing.isPracticeModeOn', 'blocco in modalit\u00e0 pratica', false],
+        ['Map.addLayer', 'civici ed evidenziazione sulla mappa', true],
+        ['Map.addFeaturesToLayer', 'disegno dei civici', true],
+        ['Map.removeAllFeaturesFromLayer', 'pulizia della mappa', true],
+        ['Map.setMapCenter', 'centratura sui civici', true],
+        ['Map.getMapCenter', '"+ Aggiungi al centro mappa"', true],
+        ['Map.getMapExtent', 'controllo della zona a schermo', false],
+        ['Map.setZoomLevel', 'zoom automatico del controllo zona', false],
+        ['Events.off', 'aggiornamento automatico del controllo zona', false],
+        ['Map.getZoomLevel', 'controllo della zona a schermo', false],
+        ['Map.setLayerZIndex', 'civici sopra gli altri evidenziatori', false],
+        ['Map.getLayerZIndex', 'civici sopra gli altri evidenziatori', false],
+        ['Map.setLayerVisibility', 'livello acceso', false],
+        ['Events.trackLayerEvents', 'clic sui pallini', false],
+        ['Events.stopLayerEventsTracking', 'clic sui pallini solo a elenco aperto', false],
+        ['StreetView.open', 'bottone Street View', false],
+        ['Shortcuts.createShortcut', 'scorciatoia da tastiera', false]
+    ];
+    let sdkMancanti = [];
+
+    function sdkHas(path) {
+        try {
+            let o = sdk;
+            const parts = path.split('.');
+            for (const k of parts.slice(0, -1)) { o = o && o[k]; if (!o) return false; }
+            return typeof o[parts[parts.length - 1]] === 'function';
+        } catch { return false; }
+    }
+
+    // Autotest: elenca cosa manca e quali funzioni ne risentono
+    function sdkSelfTest() {
+        sdkMancanti = SDK_NEEDS.filter(([path]) => !sdkHas(path))
+            .map(([path, a_che_serve, essenziale]) => ({ metodo: path, a_che_serve, essenziale }));
+        if (!sdkMancanti.length) { log(`autotest SDK: tutti i ${SDK_NEEDS.length} metodi richiesti sono presenti`); return; }
+        const gravi = sdkMancanti.filter(m => m.essenziale);
+        log(`autotest SDK: ${sdkMancanti.length} metodi mancanti su ${SDK_NEEDS.length}`, sdkMancanti);
+        if (gravi.length) {
+            toast('Questa versione del WME non espone ' + gravi.length + ' ' + pl(gravi.length, 'funzione necessaria', 'funzioni necessarie') +
+                ' allo script (' + gravi.map(m => m.a_che_serve).join('; ') + '). Scrivi wfitDiag() nella console e mandami il risultato.', 15000);
+        }
+    }
+
+    // Nome utente WME dall'SDK (UserSession). L'SDK non espone piu' l'id numerico
+    // dell'utente (dato personale): nel foglio il campo id resta vuoto.
     function currentUser() {
         const out = { name: '', rank: null, id: null };
         try {
-            const i = (sdk.State && typeof sdk.State.getUserInfo === 'function') ? sdk.State.getUserInfo() : null;
-            if (i) { out.name = i.userName || i.username || i.name || ''; out.rank = i.rank != null ? i.rank : null; out.id = i.id != null ? i.id : null; }
-        } catch { /* sotto */ }
-        if (!out.name) {
-            try {
-                const u = WME().loginManager && WME().loginManager.user;
-                const a = u && (u.attributes || u);
-                if (a) { out.name = a.userName || a.username || ''; if (out.rank == null && a.rank != null) out.rank = a.rank; if (out.id == null && a.id != null) out.id = a.id; }
-            } catch { /* pazienza */ }
-        }
-        if (out.rank == null) out.rank = userRank();
+            const i = sdk.State.getUserInfo();
+            if (i) { out.name = i.userName || ''; out.rank = i.rank != null ? i.rank : null; }
+        } catch { /* utente non ancora disponibile */ }
         return out;
     }
 
@@ -381,7 +467,7 @@
         }
         const cached = readAuthCache(u.name);
         if (!force && cached && cached.ok && Date.now() - cached.ts < AUTH_TTL_H * 3600000) {
-            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota, cached: true };
+            return { ok: true, user: u.name, ruolo: cached.ruolo, nota: cached.nota };
         }
         try {
             const r = await gasCallRipetuta({ action: 'auth', user: u.name, rank: u.rank, livello: livelloDaRank(u.rank), userId: u.id, sessione: SESSION_ID });
@@ -510,9 +596,9 @@
     // Solo in memoria: se ricarichi la pagina senza salvare, le modifiche non esistono piu'
     // e le loro righe se ne vanno con loro.
     let pendingLog = [];
-    let lastUnsaved = 0, lastUndoAt = 0, saveEventSeen = false, saveTracking = true;
-    let contatoreOk = false;
-    const PENDING_MAX_MIN = 10;   // oltre questo, una riga in sospeso viene scritta comunque
+    let lastUndoAt = 0, saveEventSeen = false, saveTracking = true;
+    let saveWay = '', lastUnsaved = 0, saveWatch = null;
+    const PENDING_MAX_MIN = 10;   // oltre questo, una riga in attesa viene scritta comunque
 
     function loadLogQueue() {
         try { const a = JSON.parse(localStorage.getItem(LOGQ_KEY) || '[]'); if (Array.isArray(a)) logQueue = a; }
@@ -544,6 +630,7 @@
         if (saveTracking) {
             pendingLog.push(riga);
             if (pendingLog.length > LOG_MAX_QUEUE) pendingLog.splice(0, pendingLog.length - LOG_MAX_QUEUE);
+            avviaSaveWatch();
         } else {
             riga.motivo = (riga.motivo ? riga.motivo + ' \u00b7 ' : '') + 'salvataggio non verificabile su questo editor';
             enqueueLog(riga);
@@ -560,62 +647,62 @@
 
     /* ------------------ aggancio al salvataggio del WME ------------------ */
 
-    // Nomi possibili dell'evento di salvataggio: l'SDK li ha aggiunti in versioni diverse,
-    // si prova a registrarli tutti e vale quello che risponde. Se non ne funziona nessuno
-    // resta il contatore delle modifiche non salvate come riprova.
-    const SAVE_EVENTS = ['wme-save-finished', 'wme-save-succeeded', 'wme-save-success', 'wme-save-completed'];
-
+    // Eventi ufficiali dell'SDK: 'wme-save-finished' dice se il salvataggio e' riuscito,
+    // 'wme-no-edits' scatta quando non resta piu' nulla da salvare o da annullare (dopo un
+    // salvataggio o dopo l'ultimo annullamento). Niente piu' controllo a tempo del contatore.
+    // Eventi ufficiali PIU' un controllo di riserva sul contatore delle modifiche: se su
+    // qualche versione del WME l'evento non arriva, le righe finirebbero nel limbo e il
+    // registro resterebbe vuoto senza che nessuno se ne accorga.
     function initSaveTracking() {
         let agganciati = 0;
-        for (const nome of SAVE_EVENTS) {
-            try {
-                sdk.Events.on({ eventName: nome, eventHandler: p => onSaveEvent(p) });
-                agganciati++;
-            } catch { /* questa versione dell'SDK non ha questo evento */ }
-        }
-        try { sdk.Events.on({ eventName: 'wme-after-undo', eventHandler: () => { lastUndoAt = Date.now(); } }); }
-        catch { /* senza questo, un annullamento potrebbe passare per salvataggio */ }
-
+        const on = (eventName, eventHandler) => {
+            try { sdk.Events.on({ eventName, eventHandler }); agganciati++; }
+            catch (e) { log('evento', eventName, 'non disponibile', e); }
+        };
+        on('wme-save-finished', p => onSaveEvent(p));
+        on('wme-after-undo', () => { lastUndoAt = Date.now(); });
+        on('wme-no-edits', onNoEdits);
         const n = unsavedCount();
-        contatoreOk = (n !== null);
+        const contatoreOk = n !== null;
         lastUnsaved = n || 0;
-        saveTracking = contatoreOk || agganciati > 0;
+        saveTracking = agganciati > 0 || contatoreOk;
         if (!saveTracking) {
-            log('salvataggi non rilevabili su questa versione del WME: le righe verranno scritte subito');
+            log('salvataggi non rilevabili: le righe verranno scritte subito, con nota');
             return;
         }
-        setInterval(controllaSalvataggio, 2000);
-        log(`salvataggi seguiti \u00b7 eventi SDK agganciati: ${agganciati} \u00b7 contatore modifiche: ${contatoreOk ? 'ok' : 'non disponibile'}`);
+        log(`salvataggi seguiti \u00b7 eventi SDK: ${agganciati}/3 \u00b7 contatore modifiche: ${contatoreOk ? 'ok' : 'non disponibile'}`);
     }
 
-    function onSaveEvent(p) {
-        if (p && (p.success === false || p.error)) return;   // salvataggio fallito: si resta in attesa
-        saveEventSeen = true;
-        promuoviPending('');
+    // Il controllo gira SOLO quando c'e' qualcosa in attesa: a riposo non costa nulla.
+    function avviaSaveWatch() {
+        if (saveWatch || !saveTracking) return;
+        saveWatch = setInterval(controllaSalvataggio, 2000);
+    }
+    function fermaSaveWatch() {
+        if (!saveWatch) return;
+        clearInterval(saveWatch);
+        saveWatch = null;
     }
 
-    // Il contatore delle modifiche non salvate torna a zero: o hai salvato, o hai annullato tutto.
-    // Un annullamento appena avvenuto fa scartare le righe, non scriverle.
+    // Il contatore delle modifiche torna a zero: o hai salvato, o hai annullato tutto.
     function controllaSalvataggio() {
+        if (!pendingLog.length) { fermaSaveWatch(); return; }
         const n = unsavedCount();
         if (n != null) {
-            if (!contatoreOk) { contatoreOk = true; log('contatore modifiche ora disponibile'); }
-            if (lastUnsaved > 0 && n === 0 && pendingLog.length) {
+            if (lastUnsaved > 0 && n === 0) {
                 if (Date.now() - lastUndoAt < 4000) scartaPending();
-                else promuoviPending('');
+                else promuoviPending('', 'contatore modifiche');
             }
             lastUnsaved = n;
         }
         scadenzaPending();
     }
 
-    // Rete di sicurezza: se il salvataggio non si riesce a rilevare (evento mai arrivato e
-    // contatore non disponibile), dopo PENDING_MAX_MIN le righe vengono scritte lo stesso,
-    // segnalando che il salvataggio non e' stato verificato. Meglio una riga con la nota
-    // che nessuna riga.
+    // Rete di sicurezza: se il salvataggio non si riesce proprio a rilevare, dopo
+    // PENDING_MAX_MIN le righe vengono scritte lo stesso, dicendo che non e' stato verificato.
+    // Meglio una riga con la nota che nessuna riga.
     function scadenzaPending() {
-        if (!pendingLog.length) return;
-        if (contatoreOk || saveEventSeen) return;   // il rilevamento funziona: si aspetta
+        if (!pendingLog.length || saveWay) return;   // se sappiamo rilevare i salvataggi si aspetta
         const limite = Date.now() - PENDING_MAX_MIN * 60000;
         const scadute = pendingLog.filter(r => Date.parse(r.ts) < limite);
         if (!scadute.length) return;
@@ -629,7 +716,21 @@
         flushLogs();
     }
 
-    function promuoviPending(nota) {
+    function onSaveEvent(p) {
+        if (p && p.success === false) return;   // salvataggio fallito: si resta in attesa
+        saveEventSeen = true;
+        lastUnsaved = 0;
+        promuoviPending('', 'evento wme-save-finished');
+    }
+
+    // Niente piu' da salvare subito dopo un annullamento: hai annullato tutto, e le righe
+    // di quelle modifiche non devono finire nel registro.
+    function onNoEdits() {
+        if (pendingLog.length && Date.now() - lastUndoAt < 4000) scartaPending();
+    }
+
+    function promuoviPending(nota, come) {
+        if (come && !saveWay) { saveWay = come; log('salvataggi rilevati con:', come); }
         if (!pendingLog.length) return;
         const n = pendingLog.length;
         for (const r of pendingLog) {
@@ -637,6 +738,7 @@
             enqueueLog(r);
         }
         pendingLog = [];
+        fermaSaveWatch();
         log(`${n} ${pl(n, 'riga registrata', 'righe registrate')} dopo il salvataggio`);
         aggiornaPendingUI();
         flushLogs();
@@ -645,6 +747,7 @@
     function scartaPending() {
         const n = pendingLog.length;
         pendingLog = [];
+        fermaSaveWatch();
         log(`${n} ${pl(n, 'riga scartata', 'righe scartate')}: modifiche annullate prima del salvataggio`);
         aggiornaPendingUI();
     }
@@ -713,7 +816,7 @@
         if (authInfo.code === 401) clearAuthCache();
         captured.clear();
         pendingLog = [];
-        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
+        clearCiviciLayer();
         try { sdk.Events.off({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); } catch { /* ignora */ }
         renderBlocked(authInfo);
     }
@@ -736,6 +839,7 @@
             await sdk.Events.once({ eventName: 'wme-ready' });
         }
         log(`avviato v${VERSION}`);
+        sdkSelfTest();
         await buildTab();               // per ora il pannello mostra solo "verifica in corso"
         loadLogQueue();
 
@@ -995,13 +1099,18 @@
 #wfit-panel .wfit-n-waze { color:#2c6791; }
 #wfit-panel .wfit-n-moved { color:#8a4b12; font-weight:600; }
 #wfit-panel .wfit-n-ovl  { color:#5b3fa0; font-weight:600; }
-#wfit-panel .wfit-n-ok   { color:#2f7a44; }
+#wfit-panel .wfit-n-rpp  { color:#1f6e6a; font-weight:600; }
+#wfit-panel .wfit-n-seq  { color:#8a6400; font-weight:600; }
 #wfit-panel .wfit-hndup  { border-left-color:#e8b530; }
 #wfit-panel .wfit-hnwaze { border-left-color:#7fa8c9; opacity:.72; }
 #wfit-panel .wfit-hnmoved { border-left-color:#e07b28; background:#fdf6f0; }
 #wfit-panel .wfit-hnovl  { border-left-color:#7d5bd0; background:#f7f4fd; }
 #wfit-panel .wfit-hnsusp { border-left-color:#cc3b3b; background:#fdf4f4; }
-#wfit-panel .wfit-hnok   { border-left-color:#3fa055; }
+#wfit-panel .wfit-hnrpp  { border-left-color:#1f8f8a; background:#f0faf9; }
+#wfit-panel .wfit-hnseq  { border-left-color:#b8860b; background:#fbf7ea; }
+#wfit-panel .wfit-hnflash { outline:2px solid var(--blu); outline-offset:1px; }
+#wfit-panel .wfit-sv { border:1px solid #bbb; border-radius:5px; background:#fff; color:var(--blu); padding:1px 5px; line-height:0; cursor:pointer; }
+#wfit-panel .wfit-sv:hover { border-color:var(--blu); }
 /* barra di scelta: segmenti affiancati, non link sparsi nel testo */
 #wfit-panel .wfit-hnsuspbar { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin:5px 0 2px; }
 #wfit-panel .wfit-suspmode { padding:2px 8px; border:1px solid #d3d8de; border-radius:999px; text-decoration:none; color:#5a6068; background:#fff; font-size:11px; }
@@ -1013,12 +1122,22 @@
 #wfit-panel .wfit-legitem { display:inline-flex; align-items:flex-start; max-width:100%; line-height:1.35; }
 #wfit-panel .wfit-legitem .wfit-swatch { flex:0 0 auto; margin-top:2px; }
 #wfit-panel .wfit-hnscan { margin:4px 0 0; font-size:11px; font-style:italic; line-height:1.35; overflow-wrap:anywhere; }
+#wfit-panel .wfit-scanbad { color:#a32b2b; font-style:normal; font-weight:600; }
 #wfit-panel .wfit-swatch { display:inline-block; width:3px; height:11px; border-radius:2px; vertical-align:-2px; margin-right:5px; flex:0 0 auto; }
 #wfit-panel .wfit-sw-dup  { background:#e8b530; }
 #wfit-panel .wfit-sw-waze { background:#7fa8c9; }
 #wfit-panel .wfit-sw-moved { background:#e07b28; }
 #wfit-panel .wfit-sw-ovl   { background:#7d5bd0; }
 #wfit-panel .wfit-sw-susp { background:#cc3b3b; }
+#wfit-panel .wfit-sw-rpp  { background:#1f8f8a; }
+#wfit-panel .wfit-sw-seq  { background:#b8860b; }
+#wfit-panel .wfit-zona { margin-top:6px; padding:6px 8px; border:1px solid #d6d9de; border-radius:8px; background:#fbfcfe; }
+#wfit-panel .wfit-zrow { display:flex; align-items:center; gap:6px; padding:2px 0; cursor:pointer; }
+#wfit-panel .wfit-zrow:hover { background:#eef3fb; border-radius:5px; }
+#wfit-panel .wfit-zdot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
+#wfit-panel .wfit-rppbtn { display:none; font-size:10px; font-weight:700; line-height:1.4; color:#1f6e6a; }
+#wfit-panel .wfit-hnrpp .wfit-rppbtn { display:inline-block; }
+#wfit-panel .wfit-norpp .wfit-rppbtn { display:none !important; }
 #wfit-panel .wfit-hnrow b { min-width:44px; }
 #wfit-panel .wfit-hnnum { width:70px; min-width:56px; padding:2px 5px; border:1px solid #bbb; border-radius:5px; font-weight:650; font-size:12px; }
 #wfit-panel .wfit-hnnum:focus { border-color:var(--blu); outline:none; }
@@ -1087,7 +1206,7 @@
       <option value="ctrlalt">&#8963;/&#8984;&#8997; CTRL + ALT + clic</option>
       <option value="custom">&#9000; Un tasto a tua scelta + clic</option>
       <option value="always">Sempre (ogni clic finisce in lista)</option>
-      <option value="off">Spenta (usa "Aggiungi selezione")</option>
+      <option value="off">Spenta</option>
     </select>
   </div>
   <div class="wfit-row" id="wfit-keyrow" title="Un solo tasto della tastiera, quello che tieni premuto mentre clicchi un segmento. Si registra una volta, resta salvato e vale per sempre. ALT, MAIUSC e CTRL non si scelgono qui: per quelli ci sono le voci fisse del menu Cattura.">
@@ -1100,7 +1219,6 @@
   </div>
   <div class="wfit-box" id="wfit-selinfo">Lista vuota.</div>
   <div class="wfit-row">
-    <button class="wfit-btn" id="wfit-add-sel">Aggiungi selezione attuale</button>
     <button class="wfit-btn" id="wfit-clear-cap">Svuota lista</button>
   </div>
   <div class="wfit-row">
@@ -1114,7 +1232,7 @@
     </select>
   </div>
   <div class="wfit-row">
-    <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="1" max="1000" step="1" style="max-width:70px" title="Distanza massima civico-segmento per il confronto (da 1 a 1000 m, predefinito 10). Nota: i punti ANNCSU stanno su edifici/ingressi, spesso 5-20 m dall'asse strada: con raggi molto stretti potresti perdere civici legittimi, con raggi larghi tirare dentro le vie vicine.">
+    <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="1" max="50" step="1" style="max-width:70px" title="Distanza massima civico-segmento per il confronto (da 1 a 50 m, predefinito 10). Oltre i 45 m Waze rifiuta i civici, quindi un raggio piu' largo non servirebbe. Nota: i punti ANNCSU stanno su edifici/ingressi, spesso 5-20 m dall'asse strada: con raggi molto stretti potresti perdere civici legittimi, con raggi larghi tirare dentro le vie vicine.">
     <label><input type="checkbox" id="wfit-titlecase"> Formato Waze</label>
   </div>
   <div class="wfit-row">
@@ -1137,6 +1255,7 @@
     <label><input type="radio" name="wfit-am" id="wfit-am-extra" value="extra"> Fuori centro abitato (PN senza citt&agrave; + AN con citt&agrave;)</label>
   </div>
   <div class="wfit-row"><button class="wfit-btn wfit-primary" id="wfit-analizza" style="flex:1">&#128269; Confronta con ANNCSU</button></div>
+  <div class="wfit-row"><button class="wfit-btn" id="wfit-zona" style="flex:1" title="Sola lettura: colora le strade a schermo confrontandole con ANNCSU (rosso = senza nome, giallo = nome diverso, verde = civici da inserire) e mostra i civici del database. Non modifica NULLA. Pensato per le zone agro e le contrade: in centro abitato, con la vista larga, si supera subito il limite di 500 strade.">&#128506;&#65039; Controlla la zona (non modifica)</button></div>
   </div>
 
   <div class="wfit-sec">
@@ -1147,19 +1266,20 @@
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
     <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia solo una parte &egrave; ancora geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). Sotto <b>Altre opzioni dati</b>, <b>Scarica tutte</b> le prende una dopo l'altra (alcuni minuti: te lo chiede prima di partire), mentre <b>Aggiorna</b> riscarica quelle che hai gi&agrave; in locale (e si accende di verde quando i tuoi dati hanno passato i 35 giorni); in tutti e due i casi il bottone diventa <b>Ferma</b> e il ciclo si interrompe dopo la regione in corso. <b>Svuota dati</b> riparte da zero. I dati ANNCSU sono <b>open data</b> rilasciati con licenza ${licLink('Creative Commons Attribuzione 4.0 (CC-BY 4.0)')}: si possono riutilizzare anche su Waze, purch&eacute; sia citata la fonte.</p>
-    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell'editor. Dal menu <b>Cattura</b> puoi passare a <b>ALT + MAIUSC</b> o <b>CTRL/&#8984; + ALT</b> (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione), alla modalit&agrave; "Sempre" o spegnerla e usare "Aggiungi selezione attuale". I chip rossi indicano i segmenti dove l'ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell'editor. Dal menu <b>Cattura</b> puoi passare a <b>ALT + MAIUSC</b> o <b>CTRL/&#8984; + ALT</b> (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione), alla modalit&agrave; "Sempre" o spegnerla. Cattura pochi segmenti alla volta, quelli che stai davvero guardando: cos&igrave; il confronto con i civici gi&agrave; su Waze resta valido e non rischi di dare lo stesso nome a un tratto che sul posto si chiama diversamente. I chip rossi indicano i segmenti dove l'ultimo Applica &egrave; fallito.</p>
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
-    <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio parte da <b>10 m</b> e arriva al massimo a <b>1000 m</b>: <b>pi&ugrave; il valore tende a zero, pi&ugrave; l'accuratezza &egrave; precisa</b>. Valori consigliati: <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine), <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati), <b>50&ndash;100 m</b> solo per capire <i>quali</i> odonimi insistono sulla zona, <b>mai</b> per applicare o inserire. Parti stretto e allarga poco per volta: se fra i risultati compaiono odonimi che con il tuo segmento non c'entrano nulla, il raggio &egrave; troppo largo. Attenzione anche al limite opposto: i punti ANNCSU stanno sugli edifici e sugli ingressi, spesso 5&ndash;20 m dalla mezzeria, quindi un raggio troppo stretto taglia fuori civici veri; e oltre <b>45 m</b> il raggio non serve a inserire, perch&eacute; Waze rifiuta comunque i civici troppo lontani dal segmento. Con <b>Civici sulla mappa</b> vedi i punti etichettati (343, 343/A&hellip;) e col menu <b>Pallini</b> li ingrandisci quanto ti serve, fino a <b>Enormi</b>: &egrave; solo un aiuto per gli occhi, non cambia nulla di quello che finisce su Waze. Se togli segmenti dalla lista, risultati e mappa si riallineano da soli.</p>
+    <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
-    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico; il numero &egrave; modificabile e si normalizza da solo (18b &rarr; 18/B); i civici oltre <b>45 m</b> dalla strada vengono esclusi (Waze li rifiuterebbe); quelli gi&agrave; presenti compaiono come <b>"gi&agrave; su Waze"</b> e si deselezionano da soli; se invece il numero esiste gi&agrave; <b>su questa strada ma in un punto sbagliato</b>, la riga arriva arancione con scritto <b>"gi&agrave; su Waze ma a ~N m: da spostare, non da aggiungere"</b> e senza spunta: in quel caso <b>trascina il civico che c'&egrave; gi&agrave;</b> sul punto giusto invece di aggiungerne un secondo (Waze accetta un solo punto per numero); se lo spunti lo stesso, prima di inserirlo lo script te lo chiede; se lo stesso numero compare in <b>pi&ugrave; punti dell'archivio</b> te li mostra <b>tutti</b>, su sfondo giallo e senza spunta, perch&eacute; solo tu puoi vedere quale posizione &egrave; quella vera: Waze ne accetta comunque uno solo per via; se due o pi&ugrave; civici cadono sulla <b>stessa identica coordinata</b> (meno di <b>1,5 m</b>) la riga diventa viola e tutto il gruppo arriva <b>senza spunta</b>, perch&eacute; i numeri si stampano uno sopra l'altro e diventano illeggibili. La scelta resta tua: controlla su Street View e spunta <b>quelli che esistono davvero</b>, anche pi&ugrave; di uno se sul posto ci sono davvero pi&ugrave; ingressi. Quelli che inserisci nascono tutti in quel punto, quindi <b>trascinali uno per uno sull'ingresso giusto prima di salvare</b>: il riepilogo finale te lo ricorda. La soglia &egrave; volutamente strettissima: i civici semplicemente <b>vicini</b> fra loro (portoni a 4&ndash;6 m, normalissimi in centro) <b>non</b> vengono toccati; con <b>"+ Aggiungi al centro mappa"</b> inserisci un civico letto su Street View nel punto dove hai centrato la mappa. Confermi con "Inserisci" (tutti quelli spuntati, senza limite di numero) e salvi. Servono una strada <b>con nome</b> e nessuna modifica pendente: se manca qualcosa, lo script te lo dice prima.</p>
-    <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito; <b>"gi&agrave; su Waze ma posizionato male"</b> &rarr; il numero c'&egrave; gi&agrave; su questa strada in un altro punto: trascina quello esistente sul punto giusto, non aggiungerne un altro. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
-    <p class="wfit-key"><span class="wfit-gnum">7 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
+    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il bottone con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato che Waze accetta &mdash; numero pi&ugrave; al massimo due lettere minuscole, quindi <b>343/A &rarr; 343a</b> &mdash; e quelli che Waze non accetta (<b>20/1</b>, <b>12/BIS</b>) restano in lista senza spunta, da inserire a mano. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il bottone <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
+    <p><span class="wfit-gnum">6 &middot; Controlla la zona.</span> Il bottone <b>Controlla la zona</b> &egrave; in <b>sola lettura</b>: non modifica nulla, colora le strade a schermo confrontandole con ANNCSU e mostra i civici del database. <b>Rosso</b> = strada senza nome (manca tutto), <b>giallo</b> = nome diverso da ANNCSU (da verificare), <b>verde</b> = nome a posto, mancano solo i civici. Le strade gi&agrave; a posto non compaiono. All'accensione lo script si porta allo <b>zoom 16</b> e da l&igrave; ti segue mentre giri la mappa; la spunta <b>"nascondi le strade che non posso modificare"</b> tiene fuori quelle bloccate sopra il tuo livello. <b>&Egrave; pensato per le zone agro e le contrade</b>, dove le strade sono poche e lunghe: in centro abitato, con la vista larga, si superano subito le <b>500 strade</b> del limite. Quel limite c'&egrave; apposta: su Waze si lavora di precisione, un tratto per volta, non a colpi di massa.</p>
+    <p><span class="wfit-gnum">7 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito; <b>"gi&agrave; su Waze ma posizionato male"</b> &rarr; il numero c'&egrave; gi&agrave; su questa strada in un altro punto: trascina quello esistente sul punto giusto, non aggiungerne un altro. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
+    <p class="wfit-key"><span class="wfit-gnum">8 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
     <div class="wfit-muted">Lo script modifica solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l'elenco modifiche prima di salvare</b>.</div>
     <p>&#128214; Questa &egrave; la <b>guida rapida</b>. Regole per esteso, esempi con immagini, tabella degli errori e note per gli editor sono nella ${guidaLink('<b>guida completa</b>')} del progetto.</p>
     <p>&#128172; Info, idee o problemi? Scrivimi su <b>Slack</b>: ${slackLink()}.</p>
   </details>
 
-  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; a cura di <b>${AUTORE}</b> &middot; dati: ${anncsuLink()} (Istat / Agenzia delle Entrate), open data con licenza ${licLink()} &middot; ${guidaLink()} &middot; info: Slack ${slackLink()}.</div>
+  <div class="wfit-foot">${logoSvg(13, 3)} <b>${SCRIPT_NAME}</b> &middot; &copy; 2026 <b>${AUTORE_FULL}</b> (${AUTORE}) &middot; codice ${codeLicLink()} &middot; dati: ${anncsuLink()} (Istat / Agenzia delle Entrate), open data con licenza ${licLink()} &middot; ${guidaLink()} &middot; info: Slack ${slackLink()}.</div>
   <div class="wfit-toast" id="wfit-toast"></div>`;
 
     // Raccoglie in un solo posto i riferimenti agli elementi interattivi del pannello
@@ -1181,7 +1301,6 @@
                 keyclr: p.querySelector('#wfit-keyclr'),
                 hlcolor: p.querySelector('#wfit-hlcolor'),
                 selinfo: p.querySelector('#wfit-selinfo'),
-                addSel: p.querySelector('#wfit-add-sel'),
                 clearCap: p.querySelector('#wfit-clear-cap'),
                 raggio: p.querySelector('#wfit-raggio'),
                 titlecase: p.querySelector('#wfit-titlecase'),
@@ -1192,6 +1311,7 @@
                 amExtra: p.querySelector('#wfit-am-extra'),
                 amUrb: p.querySelector('#wfit-am-urb'),
                 analizza: p.querySelector('#wfit-analizza'),
+                zona: p.querySelector('#wfit-zona'),
                 results: p.querySelector('#wfit-results'),
                 toast: p.querySelector('#wfit-toast')
         };
@@ -1218,7 +1338,7 @@
     function wireUi() {
         ui.regione.addEventListener('change', () => { settings.reg = ui.regione.value; saveSettings(); });
         ui.raggio.addEventListener('change', () => {
-            settings.raggio = Math.min(1000, Math.max(1, parseInt(ui.raggio.value, 10) || DEFAULT_SETTINGS.raggio));
+            settings.raggio = Math.min(RAGGIO_MAX, Math.max(1, parseInt(ui.raggio.value, 10) || DEFAULT_SETTINGS.raggio));
             ui.raggio.value = settings.raggio; // il valore corretto si vede subito nella casella
             saveSettings();
         });
@@ -1274,9 +1394,10 @@
             markUpdateDue([]);
             status('Dati locali eliminati.');
         });
-        ui.addSel.addEventListener('click', () => captureIds(getSelectedSegmentIds(), false));
         ui.clearCap.addEventListener('click', () => { captured.clear(); lastFailedIds.clear(); updateCapturedUI(); clearResultsUI(); });
         ui.analizza.addEventListener('click', analyze);
+        zonaSoloMie = settings.zonaSoloMie !== false;
+        ui.zona.addEventListener('click', () => { if (zonaAttiva) spegniZona(); else controllaZona(); });
     }
 
     async function buildTab() {
@@ -1429,7 +1550,6 @@
 
         const rec = await parseIndirToRecord(new Uint8Array(buf), reg, nome,
             (p, read, kept) => onProgress(0.45 + p * 0.55, `Elaboro ${nome}\u2026 ${Math.round(p * 100)}% &middot; lette ${fmtN(read)} &middot; con coordinate ${fmtN(kept)}`));
-        rec.fileName = fileName;
         rec.fileDate = fileDate;
         if (rec.count) await idb.put('regioni', rec);
         return rec;
@@ -1635,7 +1755,7 @@
         }
         return {
             reg, nomeReg, quando: Date.now(), count: lons.total, read, diag, pv: 9,
-            espShare: quota, espTop: topEsp, mapSource,
+            espShare: quota, espTop: topEsp,
             lons: lons.done().buffer,
             lats: lats.done().buffer,
             gids: gids.done().buffer,
@@ -1919,35 +2039,38 @@
     /* ------------------------------------------------------------------ */
 
     function getSelectedSegmentIds() {
-        return firstOk(
-            () => {
-                const sel = sdk.Editing.getSelection();
-                return (sel && sel.objectType === 'segment' && sel.ids && sel.ids.length) ? sel.ids.slice() : null;
-            },
-            () => {
-                const W = WME();
-                if (!W || !W.selectionManager) return null;
-                return W.selectionManager.getSelectedDataModelObjects()
-                    .filter(o => o.type === 'segment').map(o => o.getID());
-            }
-        ) || [];
+        try {
+            const sel = sdk.Editing.getSelection();
+            return (sel && sel.objectType === 'segment' && sel.ids && sel.ids.length) ? sel.ids.slice() : [];
+        } catch { return []; }
     }
 
-    function clearWmeSelection() {
-        firstOk(
-            () => { if (typeof sdk.Editing.clearSelection !== 'function') return null; sdk.Editing.clearSelection(); return true; },
-            () => {
-                if (typeof sdk.Editing.setSelection !== 'function') return null;
-                sdk.Editing.setSelection({ selection: { ids: [], objectType: 'segment' } });
-                return true;
-            },
-            () => {
-                const W = WME();
-                if (!W || !W.selectionManager || !W.selectionManager.unselectAll) return null;
+    // Dopo ogni cattura la selezione del WME va svuotata: se resta, il pannello del segmento
+    // rimane aperto e un nuovo clic sullo stesso segmento non genera nessun evento, quindi non
+    // si potrebbe piu' togliere dalla lista. Si prova l'SDK e si VERIFICA che abbia funzionato;
+    // solo se nessun metodo dell'SDK ci riesce si usa il WME direttamente (e lo si scrive nel log).
+    let clearWay = '';
+    const selectionEmpty = () => getSelectedSegmentIds().length === 0;
+    async function clearWmeSelection() {
+        if (selectionEmpty()) return true;
+        const ways = [
+            ['sdk.clearSelection', () => sdk.Editing.clearSelection()],
+            ['sdk.setSelection', () => sdk.Editing.setSelection({ selection: { ids: [], objectType: 'segment' } })],
+            ['wme.unselectAll', () => {
+                const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).W;
                 W.selectionManager.unselectAll();
+            }]
+        ];
+        for (const [nome, fn] of ways) {
+            try { fn(); } catch { continue; }
+            await sleep(40);   // il WME aggiorna la selezione un attimo dopo
+            if (selectionEmpty()) {
+                if (clearWay !== nome) { clearWay = nome; log('deselezione riuscita con', nome); }
                 return true;
             }
-        );
+        }
+        log('deselezione non riuscita: premi Esc per chiudere il pannello del segmento');
+        return false;
     }
 
     // Combinazioni di modificatori delle modalita' fisse. Sono scelte apposta fra quelle che il WME
@@ -2165,7 +2288,7 @@
         switch (m) {
             case 'custom': return `Cattura con ${keyLabel(settings.captureKey)} + clic: clic normale = editor normale.`;
             case 'always': return 'Cattura sempre attiva: ogni clic sui segmenti finisce in lista.';
-            default: return 'Cattura spenta: usa "Aggiungi selezione attuale".';
+            default: return 'Cattura spenta: riaccendila dal menu Cattura per mettere i segmenti in lista.';
         }
     }
 
@@ -2206,6 +2329,7 @@
 
     // Lista vuota: via risultati, civici disegnati ed evidenziazioni
     function clearResultsUI() {
+        setTimeout(syncDotTracking, 0);
         lastResults = [];
         lastPtsByG = new Map();
         lastDotFeatures = [];
@@ -2218,7 +2342,7 @@
         if (!ui.selinfo) return;
         if (!captured.size) {
             const keyTxt = MODE_TXT[settings.captureMode] || (settings.captureMode === 'custom' ? escapeHtml(keyLabel(settings.captureKey)) : null);
-            ui.selinfo.innerHTML = `Lista vuota. ${keyTxt ? `<b>${keyTxt} + clic</b> su un segmento per aggiungerlo (stessa combinazione per toglierlo).` : settings.captureMode === 'always' ? 'Clicca i segmenti sulla mappa.' : 'Usa "Aggiungi selezione attuale".'}`;
+            ui.selinfo.innerHTML = `Lista vuota. ${keyTxt ? `<b>${keyTxt} + clic</b> su un segmento per aggiungerlo (stessa combinazione per toglierlo).` : settings.captureMode === 'always' ? 'Clicca i segmenti sulla mappa.' : 'Riaccendi la cattura dal menu qui sopra.'}`;
             return;
         }
         const ids = [...captured.keys()];
@@ -2259,25 +2383,18 @@
     /* Geometria                                                           */
     /* ------------------------------------------------------------------ */
 
-    function segGeometry(id) {
-        return firstOk(
-            () => {
-                const seg = sdk.DataModel.Segments.getById({ segmentId: id });
-                return (seg && seg.geometry && seg.geometry.coordinates) || null;
-            },
-            () => {
-                const seg = WME().model.segments.getObjectById(id);
-                const g = seg.getOLGeometry ? seg.getOLGeometry() : seg.geometry;
-                return (g && g.components) ? g.components.map(c => merc2wgs(c.x, c.y)) : null;
-            }
-        );
-    }
-
     function merc2wgs(x, y) {
         const lon = (x / 20037508.34) * 180;
         let lat = (y / 20037508.34) * 180;
         lat = 180 / Math.PI * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
         return [lon, lat];
+    }
+
+    function segGeometry(id) {
+        try {
+            const seg = sdk.DataModel.Segments.getById({ segmentId: id });
+            return (seg && seg.geometry && seg.geometry.coordinates) || null;
+        } catch { return null; }
     }
 
     // distanza punto-segmento su piano locale (metri)
@@ -2363,43 +2480,10 @@
     function ensureLayer() {
         if (layerReady || layerFailed) return layerReady;
         try {
-            sdk.Map.addLayer({
-                layerName: LAYER,
-                styleRules: [{
-                    predicate: () => true,
-                    style: {
-                        pointRadius: '${pointRadius}',
-                        fillColor: '${fillColor}',
-                        fillOpacity: 0.9,
-                        strokeColor: '${strokeColor}',
-                        strokeWidth: '${strokeWidth}',
-                        strokeOpacity: '${strokeOpacity}',
-                        strokeDashstyle: '${strokeDashstyle}',
-                        strokeLinecap: 'round',
-                        label: '${label}',
-                        fontColor: '#111111',
-                        fontSize: '${fontSize}',
-                        fontWeight: 'bold',
-                        labelOutlineColor: '#ffffff',
-                        labelOutlineWidth: 3,
-                        labelYOffset: '${labelYOffset}'
-                    }
-                }],
-                styleContext: {
-                    // misure dei pallini: viaggiano con la feature, cosi' cambiare dimensione
-                    // significa semplicemente ridisegnare i punti (le linee usano i valori di riserva)
-                    pointRadius: featProp('pr', DOT_SIZES.normale.r),
-                    fontSize: featProp('fs', DOT_SIZES.normale.f + 'px'),
-                    labelYOffset: featProp('yo', DOT_SIZES.normale.y),
-                    fillColor: featProp('color', '#777777'),
-                    strokeColor: featProp('stroke', '#ffffff'),
-                    strokeWidth: featProp('w', 1.5),
-                    strokeOpacity: featProp('so', 1),
-                    strokeDashstyle: featProp('dash', 'solid'),
-                    label: featProp('label', '')
-                }
-            });
-            try { sdk.Map.setLayerVisibility({ layerName: LAYER, visibility: true }); } catch { /* facoltativo */ }
+            for (const layerName of [LAYER_HL, LAYER]) addStyledLayer(layerName);
+            // clic su un pallino: si evidenzia la sua riga nell'elenco dei civici (vedi syncDotTracking)
+            try { sdk.Events.on({ eventName: 'wme-layer-feature-clicked', eventHandler: onDotClicked }); }
+            catch (e) { log('clic sui pallini non disponibile', e); }
             layerReady = true;
         } catch (e) {
             layerFailed = true;
@@ -2409,31 +2493,106 @@
         return layerReady;
     }
 
-    function updateCiviciLayer(features) {
-        if (!ensureLayer()) return;
-        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
-        try { sdk.Map.addFeaturesToLayer({ layerName: LAYER, features }); }
-        catch (e) { log('addFeaturesToLayer KO', e); }
-        raiseOwnLayer();
+    function addStyledLayer(layerName) {
+        sdk.Map.addLayer({
+            layerName,
+            styleRules: [{
+                predicate: () => true,
+                style: {
+                    pointRadius: '${pointRadius}',
+                    fillColor: '${fillColor}',
+                    fillOpacity: 0.9,
+                    strokeColor: '${strokeColor}',
+                    strokeWidth: '${strokeWidth}',
+                    strokeOpacity: '${strokeOpacity}',
+                    strokeDashstyle: '${strokeDashstyle}',
+                    strokeLinecap: 'round',
+                    label: '${label}',
+                    fontColor: '#111111',
+                    fontSize: '${fontSize}',
+                    fontWeight: 'bold',
+                    labelOutlineColor: '#ffffff',
+                    labelOutlineWidth: 3,
+                    labelYOffset: '${labelYOffset}'
+                }
+            }],
+            styleContext: {
+                // misure dei pallini: viaggiano con la feature, cosi' cambiare dimensione
+                // significa semplicemente ridisegnare i punti (le linee usano i valori di riserva)
+                pointRadius: featProp('pr', DOT_SIZES.normale.r),
+                fontSize: featProp('fs', DOT_SIZES.normale.f + 'px'),
+                labelYOffset: featProp('yo', DOT_SIZES.normale.y),
+                fillColor: featProp('color', '#777777'),
+                strokeColor: featProp('stroke', '#ffffff'),
+                strokeWidth: featProp('w', 1.5),
+                strokeOpacity: featProp('so', 1),
+                strokeDashstyle: featProp('dash', 'solid'),
+                label: featProp('label', '')
+            }
+        });
+        try { sdk.Map.setLayerVisibility({ layerName, visibility: true }); } catch { /* facoltativo */ }
+    }
+
+    // I pallini diventano cliccabili SOLO mentre un elenco dei civici e' aperto: un livello
+    // "tracciato" si prende i clic, e con l'elenco chiuso ALT+clic deve arrivare sempre ai
+    // segmenti del WME, anche dove un pallino ci sta sopra. Il livello dei segmenti evidenziati
+    // non viene mai tracciato.
+    let dotTracking = false;
+    function syncDotTracking() {
+        const want = !!document.querySelector('.wfit-hnrev');
+        if (want === dotTracking) return;
+        if (want ? !ensureLayer() : !layerReady) return;
+        try {
+            if (want) sdk.Events.trackLayerEvents({ layerName: LAYER });
+            else sdk.Events.stopLayerEventsTracking({ layerName: LAYER });
+            dotTracking = want;
+        } catch { /* tracciamento non disponibile */ }
+    }
+
+    function onDotClicked(ev) {
+        if (!ev || ev.layerName !== LAYER) return;
+        const info = dotIndex.get(ev.featureId);
+        if (!info) return;
+        const p = info.p;
+        const same = x => Math.abs(x.lon - p.lon) < 1e-9 && Math.abs(x.lat - p.lat) < 1e-9;
+        const rows = [...document.querySelectorAll('.wfit-hnrev .wfit-hnrow')];
+        const row = rows.find(r => r.wfitP && same(r.wfitP));
+        if (row) {
+            try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* vecchio browser */ }
+            row.classList.add('wfit-hnflash');
+            setTimeout(() => row.classList.remove('wfit-hnflash'), 1800);
+            return;
+        }
+        const r = lastResults.find(x => x.g === info.g);
+        toast(`Civico ${p.label}${r ? ' \u00b7 ' + toWazeCase(r.name) : ''} \u00b7 apri l'elenco con "+N civici su Waze" per inserirlo`, 5000);
+    }
+
+    function setLayerFeatures(layerName, features) {
+        try { sdk.Map.removeAllFeaturesFromLayer({ layerName }); } catch { /* ignora */ }
+        if (!features.length) return;
+        try { sdk.Map.addFeaturesToLayer({ layerName, features }); }
+        catch (e) { log('addFeaturesToLayer KO', layerName, e); }
     }
 
     // Gli script di evidenziazione (Color Highlights ecc.) disegnano sopra i livelli aggiunti dopo:
     // riportiamo il nostro in cima a ogni ridisegno, cosi' la selezione resta sempre visibile.
+    // Si usa Map.setLayerZIndex dell'SDK: niente piu' mani negli interni della mappa.
     let zBumpLogged = false;
+    const LAYER_Z = 990;   // sopra i livelli degli oggetti, sotto i controlli della mappa
     function raiseOwnLayer() {
         try {
-            const W = WME();
-            if (!W || !W.map || !Array.isArray(W.map.layers) || typeof W.map.setLayerIndex !== 'function') return;
-            const lyr = W.map.layers.find(l => l && typeof l.name === 'string' && l.name.indexOf(LAYER) !== -1);
-            if (!lyr) return;
-            W.map.setLayerIndex(lyr, W.map.layers.length - 1);
-            if (!zBumpLogged) { zBumpLogged = true; log('livello portato sopra gli evidenziatori'); }
+            if (sdk.Map.getLayerZIndex({ layerName: LAYER }) >= LAYER_Z) return;
+            sdk.Map.setLayerZIndex({ layerName: LAYER_HL, zIndex: LAYER_Z - 1 });
+            sdk.Map.setLayerZIndex({ layerName: LAYER, zIndex: LAYER_Z });
+            if (!zBumpLogged) { zBumpLogged = true; log('livelli portati sopra gli evidenziatori'); }
         } catch { /* il colore acceso resta comunque */ }
     }
 
     function clearCiviciLayer() {
         if (!layerReady) return;
-        try { sdk.Map.removeAllFeaturesFromLayer({ layerName: LAYER }); } catch { /* ignora */ }
+        for (const layerName of [LAYER_HL, LAYER]) {
+            try { sdk.Map.removeAllFeaturesFromLayer({ layerName }); } catch { /* ignora */ }
+        }
     }
 
     // Evidenziazione dei segmenti in lista: casing scuro + tratteggio nel colore scelto.
@@ -2455,7 +2614,7 @@
     // Non serve rifare l'analisi, i civici agganciati sono gli stessi.
     function resizeDotFeatures() {
         const sz = dotSize();
-        for (const f of lastDotFeatures) {
+        for (const f of [...lastDotFeatures, ...zonaDots]) {
             if (!f.properties || f.geometry.type !== 'Point') continue;
             f.properties.pr = sz.r;
             f.properties.fs = sz.f + 'px';
@@ -2466,9 +2625,437 @@
 
     // Ridisegna il livello: prima le linee tricolore, sopra i puntini dei civici (se attivi)
     function refreshMapLayer() {
-        const feats = [...segHighlightFeatures(), ...(settings.showDots ? lastDotFeatures : [])];
-        if (!feats.length) { clearCiviciLayer(); return; }
-        updateCiviciLayer(feats);
+        const hl = [...zonaFeatures, ...segHighlightFeatures()];
+        const dots = [...zonaDots, ...(settings.showDots ? lastDotFeatures : [])];
+        if (!hl.length && !dots.length) { clearCiviciLayer(); return; }
+        if (!ensureLayer()) return;
+        setLayerFeatures(LAYER_HL, hl);
+        setLayerFeatures(LAYER, dots);
+        raiseOwnLayer();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Controlla la zona: sola lettura, niente modifiche                   */
+    /* ------------------------------------------------------------------ */
+
+    // Colori e spiegazione dei tre problemi cercati. L'ordine conta: un segmento finisce
+    // nella prima categoria che lo riguarda.
+    // Colori a semaforo, dal peggio al meglio: rosso = manca tutto, giallo = c'e' qualcosa che
+    // non torna e va verificato, verde = strada a posto, mancano solo i civici (si puo' lavorare).
+    const ZONA_TIPI = [
+        ['senzanome', '#d81b1b', '\ud83d\udd34 strada senza nome: manca tutto'],
+        ['diverso', '#efb100', '\ud83d\udfe1 nome diverso da ANNCSU: da verificare'],
+        ['mancanti', '#1faa4b', '\ud83d\udfe2 nome a posto: civici da inserire']
+    ];
+    // Zoom da cui parte il controllo: abbastanza largo da capire dove cominciare, abbastanza
+    // stretto da avere i civici caricati. Se su una strada i civici non ci sono ancora, quella
+    // strada non viene valutata (te lo dice) invece di dare numeri sbagliati.
+    const ZONA_MIN_ZOOM = 16;
+    const ZONA_MAX_SEG = 500;      // tetto di sicurezza sul numero di segmenti
+    const ZONA_MANCANTI_MIN = 5;   // quanti civici devono mancare perche' valga la pena dirlo
+    // Il controllo zona NON usa il Raggio del pannello: quello serve quando scegli tu i segmenti.
+    // Qui si guarda tutta la banca dati a schermo e ogni civico viene assegnato alla strada piu'
+    // vicina, purche' entro questa distanza (oltre, il civico non appartiene a nessuna strada).
+    const ZONA_MAX_D = 25;
+    // Strade bloccate sopra il tuo livello: puoi nasconderle, cosi' vedi solo il lavoro
+    // che puoi davvero fare. La scelta resta salvata.
+    let zonaSoloMie = true;   // valore vero letto dalle impostazioni all'avvio
+    const ZONA_MAX_DOT = 1200;     // tetto ai pallini disegnati dal controllo zona
+    let zonaAttiva = false;
+    let zonaFeatures = [];
+    let zonaDots = [];
+    let zonaMoveOff = null, zonaMoveTimer = null, zonaInCorso = false;
+
+    // Finche' il controllo e' acceso segue la mappa: appena ti fermi, rifa' il giro sulla
+    // nuova vista. Si aggancia all'evento di fine spostamento, cosi' non ricalcola a ogni pixel.
+    function seguiMappa(accendi) {
+        clearTimeout(zonaMoveTimer);
+        if (!accendi) {
+            if (zonaMoveOff) { try { zonaMoveOff(); } catch { /* gia' staccato */ } zonaMoveOff = null; }
+            return;
+        }
+        if (zonaMoveOff) return;
+        const rifai = () => {
+            clearTimeout(zonaMoveTimer);
+            zonaMoveTimer = setTimeout(() => { if (zonaAttiva && !zonaInCorso && !busy) controllaZona(true); }, 700);
+        };
+        try {
+            const off = sdk.Events.on({ eventName: 'wme-map-move-end', eventHandler: rifai });
+            zonaMoveOff = typeof off === 'function' ? off
+                : () => { try { sdk.Events.off({ eventName: 'wme-map-move-end', eventHandler: rifai }); } catch { /* pazienza */ } };
+        } catch (e) { log('aggiornamento automatico della zona non disponibile', e); }
+    }
+
+    function spegniZona() {
+        zonaAttiva = false;
+        zonaFeatures = [];
+        zonaDots = [];
+        seguiMappa(false);
+        if (ui.zona) ui.zona.textContent = '\ud83d\uddfa\ufe0f Controlla la zona (non modifica)';
+        const box = document.getElementById('wfit-zonabox');
+        if (box) box.remove();
+        refreshMapLayer();
+    }
+
+    // Segmenti carrabili con nome o senza, dentro la vista attuale
+    function segmentiAVista() {
+        let bbox = null;
+        try { bbox = sdk.Map.getMapExtent(); } catch { /* niente riquadro: si prende tutto il caricato */ }
+        const out = [];
+        let all = [];
+        try { all = sdk.DataModel.Segments.getAll() || []; } catch { return out; }
+        for (const sg of all) {
+            const c = sg && sg.geometry && sg.geometry.coordinates;
+            if (!c || c.length < 2) continue;
+            if (sg.isDrivable === false || sg.roadType === RT_RAMP) continue;
+            if (bbox) {
+                let dentro = false;
+                for (const q of c) {
+                    if (q[0] >= bbox[0] && q[0] <= bbox[2] && q[1] >= bbox[1] && q[1] <= bbox[3]) { dentro = true; break; }
+                }
+                if (!dentro) continue;
+            }
+            // hasHouseNumbers lo dice Waze anche quando i civici non sono caricati sullo schermo:
+            // e' l'unico modo per non scambiare "non li vedo" con "non ci sono".
+            out.push({ id: sg.id, c, pn: sg.primaryStreetId, haCivici: sg.hasHouseNumbers === true, lock: sg.lockRank != null ? sg.lockRank : null });
+            if (out.length > ZONA_MAX_SEG) break;
+        }
+        return out;
+    }
+
+    // Civici gia' su Waze, per segmento, letti da quello che l'editor ha in memoria
+    // (niente rete: il controllo zona deve restare veloce).
+    function civiciCaricatiPerSegmento() {
+        const per = new Map();
+        const add = h => {
+            if (!h) return;
+            const sid = h.segmentId != null ? h.segmentId : (h.segID != null ? h.segID : h.segmentID);
+            const num = h.number != null ? h.number : h.houseNumber;
+            if (sid == null || num == null) return;
+            const k = String(sid);
+            if (!per.has(k)) per.set(k, new Set());
+            per.get(k).add(hnKey(num));
+        };
+        try {
+            const HN = sdk.DataModel.HouseNumbers;
+            if (HN && typeof HN.getAll === 'function') (HN.getAll() || []).forEach(add);
+        } catch { /* sotto */ }
+        if (!per.size) {
+            try {
+                const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).W;
+                const repo = W && W.model && W.model.segmentHouseNumbers;
+                const arr = repo && typeof repo.getObjectArray === 'function' ? repo.getObjectArray() : null;
+                if (arr) arr.forEach(o => add(o && (o.attributes || o)));
+            } catch { /* nessun civico noto */ }
+        }
+        return per;
+    }
+
+    // Confronto nome Waze / nome ANNCSU, tollerante su maiuscole e accenti
+    const nomeUguale = (a, b) => deacc(String(a || '')).replace(/[^a-z0-9]+/g, '') === deacc(String(b || '')).replace(/[^a-z0-9]+/g, '');
+
+    // auto = rifatto da solo dopo uno spostamento della mappa: niente finestre, avvisi discreti
+    async function controllaZona(auto) {
+        if (zonaAttiva && !auto) { spegniZona(); return; }
+        if (!mem.n) { if (!auto) toast('Prima scarica i dati della regione.'); return; }
+        if (busy || zonaInCorso) { if (!auto) toast('Attendi la fine dell\'operazione in corso.'); return; }
+        let zoom = 99;
+        try { zoom = sdk.Map.getZoomLevel(); } catch { /* si prova lo stesso */ }
+        if (zoom < ZONA_MIN_ZOOM) {
+            // All'accensione ci si porta da soli allo zoom giusto: da li' in poi giri la mappa
+            // e il controllo ti segue. Se sei tu ad allontanarti dopo, non ti si tira indietro.
+            if (auto) {
+                zonaFeatures = []; zonaDots = []; refreshMapLayer();
+                zonaNota(`Sei allo zoom ${zoom}: troppo lontano per il controllo. Avvicinati allo zoom ${ZONA_MIN_ZOOM}.`);
+                return;
+            }
+            const spostato = await portaAZoom(ZONA_MIN_ZOOM);
+            if (!spostato) {
+                toast(`Avvicinati allo zoom ${ZONA_MIN_ZOOM} (ora ${zoom}) e riprova: da pi\u00f9 lontano il controllo non \u00e8 affidabile.`, 8000);
+                return;
+            }
+            toast(`Zoom portato a ${ZONA_MIN_ZOOM}. Gira la mappa: il controllo ti segue. Se qualche strada resta non valutata, avvicinati ancora un po'.`, 8000);
+            // si aspetta che l'editor carichi i dati della nuova vista
+            try { await Promise.race([sdk.Events.once({ eventName: 'wme-map-data-loaded' }), sleep(4000)]); }
+            catch { await sleep(1200); }
+            await sleep(300);
+        }
+        const segs = segmentiAVista();
+        if (!segs.length) {
+            if (auto) { zonaFeatures = []; zonaDots = []; refreshMapLayer(); zonaNota('Nessuna strada carrabile caricata in questa vista.'); }
+            else toast('Nessuna strada carrabile caricata in questa vista.');
+            return;
+        }
+        if (segs.length > ZONA_MAX_SEG) {
+            const msg = `Qui ci sono pi\u00f9 di ${ZONA_MAX_SEG} strade: stringi la vista.`;
+            if (auto) { zonaFeatures = []; zonaDots = []; refreshMapLayer(); zonaNota(msg); }
+            else toast(msg + ' Poi riprova.', 8000);
+            return;
+        }
+
+        zonaInCorso = true;
+        beginBusy();
+        const t0 = Date.now();
+        try {
+            status(`Controllo la zona: ${segs.length} ${pl(segs.length, 'strada', 'strade')}\u2026`);
+            const hnPerSeg = civiciCaricatiPerSegmento();
+            const dLat = ZONA_MAX_D / M_PER_DEG;
+            const trovati = [];
+            let k = 0, nonValutate = 0, aPosto = 0;
+
+            // 1) Ogni civico ANNCSU a schermo va alla strada PIU' VICINA, una volta sola: cosi'
+            //    due vie parallele non si contendono gli stessi numeri.
+            const miglior = new Map();   // indice del civico -> { si: posizione del segmento, d }
+            for (const [si, sg] of segs.entries()) {
+                if (si % 25 === 0) { setProgress(50 * si / segs.length); await tick(); }
+                let minLon = 999, minLat = 999, maxLon = -999, maxLat = -999;
+                for (const q of sg.c) {
+                    if (q[0] < minLon) minLon = q[0];
+                    if (q[0] > maxLon) maxLon = q[0];
+                    if (q[1] < minLat) minLat = q[1];
+                    if (q[1] > maxLat) maxLat = q[1];
+                }
+                const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180);
+                const dLon = ZONA_MAX_D / (M_PER_DEG * cosLat);
+                const proj = projectPolyline(sg.c, cosLat);
+                const kx = M_PER_DEG * cosLat;
+                gridForEachInBBox(minLon - dLon, minLat - dLat, maxLon + dLon, maxLat + dLat, i => {
+                    const d = distToProjected(mem.lons[i] * kx, mem.lats[i] * M_PER_DEG, proj);
+                    if (d > ZONA_MAX_D) return;
+                    const pre = miglior.get(i);
+                    if (!pre || d < pre.d) miglior.set(i, { si, d });
+                });
+            }
+
+            // 2) I civici di ogni strada, raggruppati per odonimo
+            const perSeg = new Map();    // posizione del segmento -> Map(odonimo -> {chiavi, punti})
+            for (const [i, best] of miglior) {
+                let perG = perSeg.get(best.si);
+                if (!perG) { perG = new Map(); perSeg.set(best.si, perG); }
+                const g = mem.gids[i];
+                let v = perG.get(g);
+                if (!v) { v = { chiavi: new Set(), punti: [] }; perG.set(g, v); }
+                const cv = mem.civn[i] || 0, ce = mem.cive[i] || 0;
+                const chiave = (cv || ce) ? cv * 1024 + ce : -(i + 1);
+                if (v.chiavi.has(chiave)) continue;
+                v.chiavi.add(chiave);
+                v.punti.push({ lon: mem.lons[i], lat: mem.lats[i], label: (cv ? String(cv) : '') + (ce ? '/' + mem.esps[ce] : '') });
+            }
+
+            // 3) Come sta ogni strada rispetto ad ANNCSU
+            const ur = userRank();
+            let bloccate = 0;
+            for (const [si, perG] of perSeg) {
+                k++;
+                if (k % 25 === 0) { setProgress(50 + 50 * k / perSeg.size); status(`Controllo la zona: ${k}/${perSeg.size}\u2026`); await tick(); }
+                const sg = segs[si];
+                // strada bloccata sopra il tuo livello: non potresti modificarla
+                const bloccata = ur != null && sg.lock != null && sg.lock > ur;
+                if (bloccata) { bloccate++; if (zonaSoloMie) continue; }
+                let gBest = null, nBest = 0;
+                for (const [g, v] of perG) if (v.chiavi.size > nBest) { gBest = g; nBest = v.chiavi.size; }
+                const puntiBest = (perG.get(gBest) || {}).punti || [];
+                const nomeAnncsu = toWazeCase((mem.groups[gBest] || [])[0] || '');
+                const nomeWaze = sg.pn != null ? streetNameById(sg.pn) : '';
+                const mid = lineMidpoint(sg.c);
+                if (!nomeWaze) {
+                    trovati.push({ tipo: 'senzanome', id: sg.id, c: sg.c, mid, nomeAnncsu, nomeWaze: '', n: nBest, punti: puntiBest, bloccata });
+                    continue;
+                }
+                if (!nomeUguale(nomeWaze, nomeAnncsu)) {
+                    trovati.push({ tipo: 'diverso', id: sg.id, c: sg.c, mid, nomeAnncsu, nomeWaze, n: nBest, punti: puntiBest, bloccata });
+                    continue;
+                }
+                const suWaze = hnPerSeg.get(String(sg.id));
+                // Il WME carica i civici solo da un certo zoom in su e solo per la zona a schermo.
+                // Se Waze dice che questa strada ha civici ma noi non li abbiamo, NON possiamo
+                // sapere quanti ne mancano: meglio tacere che segnalare un falso allarme.
+                if (sg.haCivici && !suWaze) { nonValutate++; continue; }
+                // Si confrontano i NUMERI, non le quantita': se su Waze ci sono gli stessi civici
+                // di ANNCSU la strada e' gia' a posto e non deve comparire fra le cose da fare.
+                const daFare = puntiBest.filter(q => !(suWaze && suWaze.has(hnKey(q.label))));
+                if (daFare.length < ZONA_MANCANTI_MIN) { aPosto++; continue; }
+                trovati.push({ tipo: 'mancanti', id: sg.id, c: sg.c, mid, nomeAnncsu, nomeWaze, n: nBest, mancanti: daFare.length, punti: daFare, bloccata });
+            }
+            setProgress(null);
+            status('');
+            mostraZona(trovati, segs.length, Date.now() - t0, nonValutate, aPosto, bloccate);
+        } catch (e) {
+            log('controllo zona KO', e);
+            if (!auto) toast('Controllo della zona non riuscito: ' + errText(e), 8000);
+        } finally {
+            zonaInCorso = false;
+            endBusy();
+        }
+    }
+
+    // Porta la mappa allo zoom richiesto. Le firme cambiano fra le versioni dell'SDK, quindi
+    // si provano tutte e poi si VERIFICA leggendo lo zoom: niente successi dati per scontati.
+    async function portaAZoom(z) {
+        const modi = [
+            ['setZoomLevel({zoomLevel})', () => sdk.Map.setZoomLevel({ zoomLevel: z })],
+            ['setZoomLevel(z)', () => sdk.Map.setZoomLevel(z)],
+            ['setZoom({zoomLevel})', () => sdk.Map.setZoom({ zoomLevel: z })],
+            ['setMapCenter({lonLat,zoomLevel})', () => {
+                const c = mapCenter();
+                if (!c) throw new Error('centro mappa sconosciuto');
+                sdk.Map.setMapCenter({ lonLat: { lon: c[0], lat: c[1] }, zoomLevel: z });
+            }]
+        ];
+        for (const [nome, fn] of modi) {
+            try { fn(); } catch { continue; }
+            await sleep(250);
+            if (zoomOra() >= z) { log('zoom portato a', z, 'con', nome); return true; }
+        }
+        log('nessun modo di cambiare zoom ha funzionato');
+        return false;
+    }
+
+    // Messaggio nella scheda quando il ricalcolo automatico non puo' girare
+    function zonaNota(txt) {
+        const box = document.getElementById('wfit-zonabox');
+        if (!box) return;
+        box.innerHTML = '';
+        const d = document.createElement('div');
+        d.className = 'wfit-muted';
+        d.innerHTML = `<b>Controllo zona</b> \u00b7 ${escapeHtml(txt)} Il controllo resta acceso e riparte da solo.`;
+        box.appendChild(d);
+    }
+
+    function mostraZona(trovati, nSeg, ms, nonValutate, aPosto, bloccate) {
+        zonaAttiva = true;
+        seguiMappa(true);
+        if (ui.zona) ui.zona.textContent = '\u2716\ufe0e Togli i colori del controllo zona';
+        const colore = t => (ZONA_TIPI.find(x => x[0] === t) || [])[1] || '#888';
+        const sz = dotSize();
+        zonaFeatures = [];
+        zonaDots = [];
+        let nd = 0;
+        for (const x of trovati) {
+            const geometry = { type: 'LineString', coordinates: x.c };
+            const col = colore(x.tipo);
+            zonaFeatures.push({ id: 'wfit-z-c-' + x.id, type: 'Feature', geometry, properties: { stroke: '#1d1d1d', w: 9, so: 0.6, dash: 'solid', label: '' } });
+            zonaFeatures.push({ id: 'wfit-z-l-' + x.id, type: 'Feature', geometry, properties: { stroke: col, w: 5, so: 0.95, dash: 'solid', label: '' } });
+            // i civici ANNCSU della strada segnalata: cosi' si vede subito dove puntare
+            for (const q of (x.punti || [])) {
+                if (nd >= ZONA_MAX_DOT) break;
+                zonaDots.push({
+                    id: 'wfit-zd-' + x.id + '-' + (nd++),
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [q.lon, q.lat] },
+                    properties: { color: col, label: q.label, pr: sz.r, fs: sz.f + 'px', yo: sz.y }
+                });
+            }
+        }
+        refreshMapLayer();
+
+        const vecchio = document.getElementById('wfit-zonabox');
+        if (vecchio) vecchio.remove();
+        const box = document.createElement('div');
+        box.id = 'wfit-zonabox';
+        box.className = 'wfit-zona';
+        const head = document.createElement('div');
+        head.className = 'wfit-muted';
+        head.innerHTML = `<b>Controllo zona</b> \u00b7 ${nSeg} ${pl(nSeg, 'strada esaminata', 'strade esaminate')} in ${(ms / 1000).toFixed(1)}s \u00b7 `
+            + `${trovati.length} ${pl(trovati.length, 'da guardare', 'da guardare')}`
+            + (zonaDots.length ? ` \u00b7 ${zonaDots.length} civici ANNCSU mostrati sulla mappa` : '')
+            + '. Nessuna modifica \u00e8 stata fatta, e il controllo si aggiorna da solo quando sposti la mappa.';
+        head.title = 'Il controllo zona non usa il Raggio del pannello (quello vale quando scegli tu i segmenti): '
+            + `qui ogni civico ANNCSU a schermo viene assegnato alla strada pi\u00f9 vicina, entro ${ZONA_MAX_D} m.`;
+        box.appendChild(head);
+        // il tratteggio colorato dei segmenti in lista non c'entra col semaforo: si spiega,
+        // altrimenti sembra una quarta categoria senza legenda
+        if (captured.size) {
+            const nota = document.createElement('div');
+            nota.className = 'wfit-muted';
+            nota.style.marginTop = '4px';
+            nota.innerHTML = `<span class="wfit-zdot" style="display:inline-block;background:${settings.hlColor}"></span> `
+                + `il tratteggio \u00e8 ${pl(captured.size, 'il segmento che hai', 'i segmenti che hai')} in lista (${captured.size}), non fa parte del controllo.`;
+            box.appendChild(nota);
+        }
+        // spunta per nascondere le strade bloccate sopra il proprio livello
+        if (bloccate || !zonaSoloMie) {
+            const lab = document.createElement('label');
+            lab.className = 'wfit-muted';
+            lab.style.display = 'flex';
+            lab.style.alignItems = 'center';
+            lab.style.gap = '6px';
+            lab.style.marginTop = '4px';
+            lab.title = 'Una strada bloccata a un livello superiore al tuo non la puoi modificare: '
+                + 'con la spunta attiva resta fuori dall\'elenco e dalla mappa.';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = zonaSoloMie;
+            cb.addEventListener('change', () => {
+                zonaSoloMie = cb.checked;
+                settings.zonaSoloMie = zonaSoloMie;
+                saveSettings();
+                controllaZona(true);
+            });
+            lab.appendChild(cb);
+            lab.appendChild(document.createTextNode(
+                zonaSoloMie
+                    ? `nascondi le strade che non posso modificare${bloccate ? ` (${bloccate} ${pl(bloccate, 'nascosta', 'nascoste')})` : ''}`
+                    : `nascondi le strade che non posso modificare${bloccate ? ` (${bloccate} ${pl(bloccate, 'bloccata', 'bloccate')} \ud83d\udd12)` : ''}`));
+            box.appendChild(lab);
+        }
+        if (nonValutate) {
+            const w = document.createElement('div');
+            w.className = 'wfit-hnnote wfit-n-warn';
+            w.textContent = `\u26a0\ufe0f ${nonValutate} ${pl(nonValutate, 'strada ha gi\u00e0 civici su Waze ma non', 'strade hanno gi\u00e0 civici su Waze ma non')} `
+                + `${pl(nonValutate, 'li ho potuti contare', 'li ho potuti contare')} a questo zoom: ${pl(nonValutate, 'non \u00e8 stata valutata', 'non sono state valutate')}. `
+                + `Avvicinati un altro po'${zoomOra() != null ? ' (sei allo zoom ' + zoomOra() + ')' : ''} e il controllo si rif\u00e0 da solo.`;
+            box.appendChild(w);
+        }
+        for (const [tipo, col, txt] of ZONA_TIPI) {
+            const gruppo = trovati.filter(x => x.tipo === tipo);
+            if (!gruppo.length) continue;
+            const t = document.createElement('div');
+            t.className = 'wfit-muted';
+            t.style.marginTop = '4px';
+            t.innerHTML = `<b>${gruppo.length}</b> \u00b7 ${txt}`;
+            box.appendChild(t);
+            for (const x of gruppo.slice(0, 12)) {
+                const r = document.createElement('div');
+                r.className = 'wfit-zrow';
+                const d = document.createElement('span');
+                d.className = 'wfit-zdot';
+                d.style.background = col;
+                const label = document.createElement('span');
+                label.textContent = (x.bloccata ? '\ud83d\udd12 ' : '') + (tipo === 'senzanome' ? `${x.nomeAnncsu || '(odonimo ignoto)'} \u00b7 ${x.n} civici ANNCSU da mettere`
+                    : tipo === 'diverso' ? `${x.nomeWaze} \u2192 ANNCSU: ${x.nomeAnncsu}`
+                    : `${x.nomeWaze} \u00b7 ${x.mancanti} civici da inserire subito`);
+                r.appendChild(d); r.appendChild(label);
+                r.title = 'Clic: centra la mappa su questa strada e la seleziona nell\'editor.';
+                r.addEventListener('click', () => {
+                    if (x.mid) quickCenter(x.mid[0], x.mid[1]);
+                    suppressUntil = Date.now() + 900;
+                    try { sdk.Editing.setSelection({ selection: { ids: [x.id], objectType: 'segment' } }); } catch { /* pazienza */ }
+                });
+                box.appendChild(r);
+            }
+            if (gruppo.length > 12) {
+                const more = document.createElement('div');
+                more.className = 'wfit-muted';
+                more.textContent = `\u2026 e altre ${gruppo.length - 12} (colorate sulla mappa)`;
+                box.appendChild(more);
+            }
+        }
+        if (aPosto) {
+            const ok = document.createElement('div');
+            ok.className = 'wfit-muted';
+            ok.style.marginTop = '4px';
+            ok.textContent = `\u2713 ${aPosto} ${pl(aPosto, 'strada gi\u00e0 a posto', 'strade gi\u00e0 a posto')}: nome giusto e stessi civici di ANNCSU, niente da fare.`;
+            box.appendChild(ok);
+        }
+        if (!trovati.length) {
+            const ok = document.createElement('div');
+            ok.className = 'wfit-muted';
+            ok.style.marginTop = '4px';
+            ok.textContent = '\u2713 In questa vista non c\'\u00e8 niente da sistemare secondo ANNCSU: sposta la mappa, il controllo ti segue.';
+            box.appendChild(ok);
+        }
+        if (ui.results && ui.results.parentNode) ui.results.parentNode.insertBefore(box, ui.results);
     }
 
     /* ------------------------------------------------------------------ */
@@ -2590,6 +3177,7 @@
     // Usa la stessa lista di lastPtsByG, ripetizioni comprese: cosi' i puntini sulla mappa e le righe
     // dell'elenco di controllo mostrano sempre esattamente le stesse cose.
     function drawCivici() {
+        dotIndex.clear();
         const colorOf = new Map(lastResults.map(r => [r.g, r.color]));
         const sz = dotSize();
         const features = [];
@@ -2598,8 +3186,10 @@
             const color = colorOf.get(g);
             if (!color) continue;
             for (const p of arr) {
+                const fid = 'wfit-' + g + '-' + (n++);
+                dotIndex.set(fid, { g, p });
                 features.push({
-                    id: 'wfit-' + g + '-' + (n++),
+                    id: fid,
                     type: 'Feature',
                     geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
                     properties: { color, label: p.label, pr: sz.r, fs: sz.f + 'px', yo: sz.y }
@@ -2620,7 +3210,17 @@
     // Qui resta solo il minimo di scorta, cosi' i nomi restano sensati anche se il file
     // non e' raggiungibile.
     const ODONIMI_FALLBACK = {
-        abbreviazioni: { diramazione: 'Dir', diramazioni: 'Dir', diramaz: 'Dir', diram: 'Dir' },
+        abbreviazioni: { diramazione: 'dir', diramazioni: 'dir', diramaz: 'dir', diram: 'dir' },
+        espansioni: {
+            'mons.': 'Monsignor', 'dott.': 'Dottor', 'prof.': 'Professor', 'gen.': 'Generale', 'col.': 'Colonnello',
+            'cap.': 'Capitano', 'ten.': 'Tenente', 'magg.': 'Maggiore', 'on.': 'Onorevole', 'avv.': 'Avvocato',
+            'ing.': 'Ingegner', 'sen.': 'Senatore', 'card.': 'Cardinale', 'f.lli': 'Fratelli', 'c.da': 'Contrada',
+            'c/da': 'Contrada', 'p.zza': 'Piazza', 'p.za': 'Piazza', 'v.le': 'Viale', 'l.go': 'Largo', 'c.so': 'Corso',
+            'loc.': 'Localit\u00e0', 'fraz.': 'Frazione', 'str.': 'Strada', 'vic.': 'Vicolo', 'trav.': 'Traversa',
+            'circ.': 'Circonvallazione', 'racc.': 'Raccordo', 'var.': 'Variante'
+        },
+        elisioni: ['dell', 'dall', 'nell', 'sull', 'all', 'coll', 'degl', 'dagl', 'negl', 'sugl', 'agl', 'd', 'un'],
+        cognomiConApostrofo: ["d'annunzio", "d'azeglio", "d'acquisto", "d'amico", "d'angelo", "d'alessandro", "d'agostino", "d'amato", "d'onofrio"],
         minuscole: ['il', 'lo', 'la', 'i', 'gli', 'le', 'di', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dallo', 'dalla', 'dai', 'dagli', 'dalle', 'de', 'd', 'li', 'e', 'ed', 'a', 'ad', 'al', 'allo', 'alla', 'ai', 'agli', 'alle', 'in', 'nel', 'nello', 'nella', 'nei', 'negli', 'nelle', 'su', 'sul', 'sulla', 'sui', 'sugli', 'sulle', 'con', 'col', 'per', 'tra', 'fra', 'un', 'uno', 'una'],
         particelleCognome: ['di', 'de', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dalla', 'dalle', 'la', 'lo', 'li'],
         cognomiConParticella: ['de amicis', 'de gasperi', 'de nicola', 'de sanctis', 'de sica', 'della chiesa', 'dalla chiesa', 'di giacomo', 'di pietro', 'di vittorio', 'la malfa', 'lo bianco'],
@@ -2629,7 +3229,7 @@
         eccezioniParticella: ['di savoia', 'di rienzo', 'dei mille', 'dalle bande nere', 'della francesca'],
         toponimiReligiosi: ['san', 'santa', 'santo', 'sant', 'ss', 'madonna', 'nostra', 'signora', 'beata', 'beato', 'chiesa', 'cappella', 'santuario', 'convento', 'abbazia', 'pieve'],
         romaniAmbigui: ['c', 'd', 'i', 'l', 'm', 'v', 'x', 'ci', 'di', 'li', 'mi', 'vi'],
-        contestoRomanoPrima: ['papa', 'pio', 'giovanni', 'paolo', 'leone', 'benedetto', 'gregorio', 'clemente', 'sisto', 'urbano', 'vittorio', 'emanuele', 'umberto', 'carlo', 'luigi', 'federico', 'enrico', 'ferdinando', 're', 'regina', 'traversa', 'parallela', 'lotto'],
+        contestoRomanoPrima: ['vico', 'papa', 'pio', 'giovanni', 'paolo', 'leone', 'benedetto', 'gregorio', 'clemente', 'sisto', 'urbano', 'vittorio', 'emanuele', 'umberto', 'carlo', 'luigi', 'federico', 'enrico', 'ferdinando', 're', 'regina', 'traversa', 'parallela', 'lotto'],
         romanoMaxAmbiguo: 10,
         contestoRomanoDopo: ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'],
         nomiPropri: ['alcide', 'antonio', 'carlo', 'cesare', 'francesco', 'giovanni', 'giuseppe', 'luigi', 'marco', 'mario', 'pietro', 'vittorio']
@@ -2659,6 +3259,9 @@
             dopo: S(ODO.contestoRomanoDopo),
             nomi: S(ODO.nomiPropri),
             cognomi: L(ODO.cognomiConParticella),
+            cognomiApo: L(ODO.cognomiConApostrofo),
+            elisioni: S(ODO.elisioni),
+            espansioni: new Map(Object.entries(ODO.espansioni || {}).map(([k, v]) => [deacc(k), String(v)])),
             eccezioni: L(ODO.eccezioniParticella)
         };
     }
@@ -2691,12 +3294,154 @@
         return tot;
     }
 
-    // Nome pronto per Waze: maiuscole all'italiana + abbreviazioni (Diramazione -> Dir).
-    // Le abbreviazioni valgono anche a Title Case spento: sono regole di nome, non di stile.
-    function toWazeCase(s) {
-        const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
-        if (!t) return t;
-        return applyAbbrev(settings.titleCase ? titleCaseIT(t) : t);
+    // Nome pronto per Waze secondo la guida "Denominazione delle strade" della Wazeopedia Italia.
+    // Il Title Case si puo' spegnere (e' stile); le altre regole valgono sempre (sono regole di nome).
+    // toWazeCaseInfo restituisce anche le note da mostrare nella scheda.
+    function toWazeCaseInfo(s) {
+        const notes = [];
+        let t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+        if (!t) return { name: t, notes };
+        t = fixAccents(t);
+        t = expandDotted(t);
+        t = t.replace(/\b([A-Za-z])\.(?=[A-Za-z]{2,})/g, '$1. ');   // "G.MARCONI" -> "G. MARCONI"
+        if (settings.titleCase) t = titleCaseIT(t);
+        t = applySigle(t);
+        t = applyAbbrev(t);
+        t = applyDates(t);
+        t = applyOrdinals(t);
+        t = dropInitials(t, notes);
+        return { name: t.replace(/\s+/g, ' ').trim(), notes };
+    }
+    function toWazeCase(s) { return toWazeCaseInfo(s).name; }
+
+    // Accento scritto come apostrofo in fondo alla parola: LIBERTA' -> LIBERTÀ, NICOLO' -> NICOLÒ.
+    // Solo parole di almeno 3 lettere: de', da', po', ca' sono troncamenti veri e restano cosi'.
+    const ACCENTI = { a: '\u00e0', e: '\u00e8', i: '\u00ec', o: '\u00f2', u: '\u00f9', A: '\u00c0', E: '\u00c8', I: '\u00cc', O: '\u00d2', U: '\u00d9' };
+    // Numeri romani con l'apostrofo (XXIII', VI'): la vecchia tabella TTS lo chiedeva, la guida
+    // dice che non serve piu'. Si toglie l'apostrofo, senza scambiarlo per un accento.
+    function fixAccents(t) {
+        t = t.replace(/(^|\s)([IVXLC]{1,7})['\u2019](?=\s|$|[,;)])/g,
+            (m, lead, r) => (ROMAN.test(r) && r.toUpperCase() !== 'LI') ? lead + r : m);
+        return t.replace(/([A-Za-z\u00c0-\u024f]{2,})([aeiouAEIOU])['\u2019](?=\s|$|[,;.)])/g, (m, pre, v) => pre + ACCENTI[v]);
+    }
+
+    // Abbreviazioni puntate sciolte per esteso (Mons. -> Monsignor, F.lli -> Fratelli, C.da ->
+    // Contrada): la guida vuole il nome per esteso, e il TTS le punteggiate non le legge bene.
+    // L'elenco sta in data/odonimi.json ("espansioni").
+    function expandDotted(t) {
+        if (!ODO_SET.espansioni.size) return t;
+        return t.split(' ').map(w => {
+            const v = ODO_SET.espansioni.get(deacc(w));
+            if (!v) return w;
+            return w === w.toUpperCase() ? v.toUpperCase() : v;
+        }).join(' ');
+    }
+
+    // Sigle di autostrade, statali, regionali, provinciali e NSA: maiuscole e senza spazi,
+    // con il suffisso minuscolo attaccato (SS12, SP20bis, SS591var, SS20dir, NSA122).
+    const SIGLA_TIPO = t => {
+        const k = t.toLowerCase().replace(/[\s.]+/g, '');
+        if (/^(stradastatale|ss)$/.test(k)) return 'SS';
+        if (/^(stradaregionale|sr)$/.test(k)) return 'SR';
+        if (/^(stradaprovinciale|sp)$/.test(k)) return 'SP';
+        if (/^(nuovastradaanas|nsa)$/.test(k)) return 'NSA';
+        if (k === 'sc') return 'SC';
+        return 'A';
+    };
+    const SIGLA_SUF = { bis: 'bis', ter: 'ter', quater: 'quater', dir: 'dir', diramazione: 'dir', var: 'var', variante: 'var', racc: 'racc', raccordo: 'racc', radd: 'radd', raddoppio: 'radd' };
+    const SIGLA_FIND = /(^|\s)(strada\s+statale|strada\s+regionale|strada\s+provinciale|nuova\s+strada\s+anas|autostrada\s+a|autostrada|s\.\s?s\.|s\.\s?r\.|s\.\s?p\.|s\.\s?c\.|nsa|ss|sr|sp|sc|(?=a\s?\d)a)\s*(?:n[.\u00b0\u00ba]?\s*)?(\d{1,4})(?:\s*(bis|ter|quater|dir|diramazione|var|variante|racc|raccordo|radd|raddoppio)\.?)?(?=\s|$|[,;)-])/gi;
+    function applySigle(t) {
+        // SGC (Strada di Grande Comunicazione): sigla che il TTS legge per esteso, sempre maiuscola
+        t = t.replace(/(^|\s)s\.?\s?g\.?\s?c\.?(?=\s|$)/gi, '$1SGC');
+        return t.replace(SIGLA_FIND, (m, lead, tipo, num, suf, off) => {
+            // "A14" da solo vale solo a inizio nome ("Via A 14" non e' un'autostrada)
+            if (/^a$/i.test(tipo) && off > 0) return m;
+            return lead + SIGLA_TIPO(tipo.replace(/^autostrada\s+a$/i, 'a')) + num + (suf ? SIGLA_SUF[suf.toLowerCase()] : '');
+        });
+    }
+
+    // Date con numeri arabi anche se scritte in romano o in lettere (Via 4 Novembre, Via 25 Aprile,
+    // Via 20 Settembre). Unica eccezione della guida: Via 1\u00ba Maggio, con l'indicatore ordinale \u00ba.
+    const MESI = new Set(['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre']);
+    const NUM_PAROLE = { primo: 1, uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5, sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10, undici: 11, dodici: 12, tredici: 13,
+        quattordici: 14, quindici: 15, sedici: 16, diciassette: 17, diciotto: 18, diciannove: 19, venti: 20, ventuno: 21, ventidue: 22, ventitre: 23,
+        ventiquattro: 24, venticinque: 25, ventisei: 26, ventisette: 27, ventotto: 28, ventinove: 29, trenta: 30, trentuno: 31 };
+    function applyDates(t) {
+        const toks = t.split(' ');
+        for (let i = 0; i < toks.length - 1; i++) {
+            const mese = deacc(splitTok(toks[i + 1]).core);
+            if (!MESI.has(mese)) continue;
+            const p = splitTok(toks[i]);
+            const c = deacc(p.core);
+            let n = null;
+            if (/^\d{1,2}$/.test(c)) n = parseInt(c, 10);
+            else if (isRoman(c) && romanValue(c) <= 31) n = romanValue(c);
+            else if (NUM_PAROLE[c]) n = NUM_PAROLE[c];
+            if (!n || n > 31) continue;
+            toks[i] = p.pre + (n === 1 && mese === 'maggio' ? '1\u00ba' : String(n));
+        }
+        return toks.join(' ');
+    }
+
+    // Aggettivi ordinali davanti al tipo di strada: numeri arabi con l'apice a (1\u00aa Traversa,
+    // 2\u00aa Strada). Vale per la forma in lettere (Seconda), in romano (II) e per "2^"/"2a".
+    // "2\u00b0" (col simbolo dei gradi, sbagliato) diventa "2\u00ba".
+    const ORD_F = { prima: 1, seconda: 2, terza: 3, quarta: 4, quinta: 5, sesta: 6, settima: 7, ottava: 8, nona: 9, decima: 10,
+        undicesima: 11, dodicesima: 12, tredicesima: 13, quattordicesima: 14, quindicesima: 15, sedicesima: 16,
+        diciassettesima: 17, diciottesima: 18, diciannovesima: 19, ventesima: 20 };
+    const DUG_F = new Set(['traversa', 'strada', 'rampa', 'salita', 'discesa', 'scesa', 'calata', 'via', 'piazza', 'contrada', 'cupa', 'stradella', 'viuzza']);
+    const PREP_DI = new Set(['di', 'del', 'dello', 'della', 'dei', 'degli', 'delle']);
+    // dopo il tipo di strada il romano e' un numero d'ordine ("Traversa II Via Roma", "Vico II"): resta com'e'
+    const DUG_TUTTI = new Set([...DUG_F, 'vico', 'vicolo', 'viale', 'corso', 'largo', 'supportico', 'fondaco', 'cortile', 'trav']);
+    function applyOrdinals(t) {
+        const toks = t.split(' ');
+        for (let i = 0; i < toks.length - 1; i++) {
+            const p = splitTok(toks[i]);
+            const c = deacc(p.core);
+            const next = deacc(splitTok(toks[i + 1]).core);
+            if (!c || !next) continue;
+            // il numero d'ordine puo' stare prima del tipo di strada ("Prima Traversa Via Roma")
+            // oppure dopo ("Traversa Prima di Via delle Arti", "Traversa Prima Via Roma").
+            // Dopo vale solo se segue un'altra strada, con o senza "di": "Via Seconda Guerra
+            // Mondiale" non e' una numerazione e resta com'e'.
+            const prev = i > 0 ? deacc(splitTok(toks[i - 1]).core) : '';
+            const after2 = i + 2 < toks.length ? deacc(splitTok(toks[i + 2]).core) : '';
+            const numerata = DUG_F.has(next)
+                || (DUG_TUTTI.has(prev) && PREP_DI.has(next) && DUG_TUTTI.has(after2));
+            let out = null;
+            const dg = /^(\d{1,2})(a?)$/.exec(c);
+            if (dg && (p.post === '^' || p.post === '\u00aa')) out = dg[1] + '\u00aa';
+            else if (dg && !dg[2] && (p.post === '\u00b0' || p.post === '\u00ba')) out = dg[1] + '\u00ba';
+            else if (numerata) {
+                if (ORD_F[c]) out = ORD_F[c] + '\u00aa';
+                else if (dg && dg[2]) out = dg[1] + '\u00aa';
+                else if (isRoman(c) && romanValue(c) <= 20 && !DUG_TUTTI.has(prev)) out = romanValue(c) + '\u00aa';
+            }
+            if (out) toks[i] = p.pre + out;
+        }
+        return toks.join(' ');
+    }
+
+    // Lettere puntate: la guida vuole il nome per esteso oppure niente ("Via Garibaldi", non
+    // "Via G. Garibaldi"), perche' il TTS non le legge. Le iniziali di persona si tolgono;
+    // "S." e "SS." (San, Santa, Santo, Santi, Santissima) non si possono sciogliere da soli.
+    function dropInitials(t, notes) {
+        const toks = t.split(' ');
+        const out = [];
+        for (let i = 0; i < toks.length; i++) {
+            const w = toks[i];
+            if (i > 0 && /^s{1,2}\.$/i.test(w)) {
+                notes.push(`"${w.toUpperCase()}" \u00e8 un'abbreviazione puntata che il TTS non legge: scrivi per esteso San, Santa, Santo, Santi o Santissima`);
+                out.push(w);
+                continue;
+            }
+            if (i > 0 && i < toks.length - 1 && /^([A-Za-z]\.){1,3}$/.test(w)) {
+                notes.push(`tolta l'iniziale puntata "${w.toUpperCase()}": se conosci il nome, scrivilo per esteso`);
+                continue;
+            }
+            out.push(w);
+        }
+        return out.join(' ');
     }
 
     function applyAbbrev(s) {
@@ -2704,7 +3449,8 @@
         return s.split(' ').map(t => {
             const p = splitTok(t);
             const v = ODO_SET.abbrev.get(deacc(p.core));
-            return v ? p.pre + v + p.post : t;
+            // il punto dopo l'abbreviazione si toglie: la tabella TTS vuole "dir", non "dir."
+            return v ? p.pre + v + p.post.replace(/^\./, '') : t;
         }).join(' ');
     }
 
@@ -2731,7 +3477,11 @@
             // e' la parola italiana (DI = 501, LI = 51, MI = 1001, C = 100).
             if (romanValue(c) > (ODO.romanoMaxAmbiguo || 10)) return false;
             if (ODO_SET.dopo.has(core[i + 1] || '')) return true;     // VI Novembre
-            return ODO_SET.prima.has(core[i - 1] || '');              // Traversa VI, Pio VI
+            if (ODO_SET.prima.has(core[i - 1] || '')) return true;     // Traversa VI, Pio VI
+            // Ultima parola del nome, dopo un nome di persona: "Via Carlo Alberto I",
+            // "Via Umberto I". Se seguisse altro ("Via i Mille") sarebbe l'articolo.
+            const prev = core[i - 1] || '';
+            return i === core.length - 1 && i > 0 && !!prev && !ODO_SET.minuscole.has(prev) && !DUG_TUTTI.has(prev);
         };
         // "Giuseppe Di Vittorio" si', "Madonna delle Grazie" no
         const isCognome = i => {
@@ -2748,9 +3498,26 @@
             return ODO_SET.nomi.has(prev) || prevIniziale;           // nome di persona o iniziale puntata
         };
 
+        // "d'" maiuscola solo nei cognomi (Gabriele D'Annunzio), minuscola altrove (Lama d'Oro,
+        // San Francesco d'Assisi): stesso ragionamento delle particelle "di"/"de"
+        const isCognomeApo = i => {
+            if (ODO_SET.cognomiApo.includes(core[i])) return true;
+            if (core.slice(0, i).some(w => ODO_SET.religiosi.has(w))) return false;
+            const prev = core[i - 1] || '';
+            const prevIniziale = prev.length === 1 && parts[i - 1].post.indexOf('.') >= 0;
+            return ODO_SET.nomi.has(prev) || prevIniziale;
+        };
+
         return parts.map((p, i) => {
             if (!p.core) return toks[i];
             const c = core[i];
+            // preposizione o articolo eliso in mezzo al nome: minuscolo come "della", la parola
+            // dopo l'apostrofo maiuscola (Via dell'Arte, Contrada Lama d'Oro, ISTAT: Anzola dell'Emilia)
+            const ap = i > 0 ? /^(.+?)(['\u2019])(.+)$/.exec(p.core) : null;
+            if (ap && ODO_SET.elisioni.has(deacc(ap[1]))) {
+                const pre = deacc(ap[1]) === 'd' && isCognomeApo(i) ? 'D' : ap[1].toLowerCase();
+                return p.pre + pre + ap[2] + capIt(ap[3].toLowerCase()) + p.post;
+            }
             // iniziale puntata: "A. De Gasperi", "G. Marconi"
             if (c.length === 1 && p.post.indexOf('.') >= 0) return p.pre + p.core.toUpperCase() + p.post;
             if (romanOk(i)) return p.pre + p.core.toUpperCase() + p.post;
@@ -2803,6 +3570,7 @@
     function renderResults(results) {
         if (!ui.results || !results || !results.length) return;
         ui.results.innerHTML = '';
+        syncDotTracking();
         if (lastDupCount) {
             const note = document.createElement('div');
             note.className = 'wfit-muted';
@@ -2811,8 +3579,25 @@
             note.innerHTML = `&#8505;&#65039; ${lastDupCount} ${pl(lastDupCount, 'numero civico ripetuto', 'numeri civici ripetuti')} nell'archivio: ${pl(lastDupCount, 'mostrato', 'mostrati')} comunque, da valutare.`;
             ui.results.appendChild(note);
         }
+        // Com'e' la strada su Waze adesso, cosi' si capisce subito se c'e' qualcosa da fare
+        const oraSuWaze = new Map();
+        for (const id of captured.keys()) {
+            let lab = '(senza strada)';
+            try { const st = segAddressState(id); if (st.pn != null) lab = streetLabel(st.pn); } catch { /* ignoto */ }
+            oraSuWaze.set(lab, (oraSuWaze.get(lab) || 0) + 1);
+        }
+        if (oraSuWaze.size) {
+            const d = document.createElement('div');
+            d.className = 'wfit-muted';
+            d.style.marginBottom = '5px';
+            d.textContent = 'Su Waze ora: ' + [...oraSuWaze.entries()].sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => `${k} (${v})`).join(' \u00b7 ');
+            ui.results.appendChild(d);
+        }
+        const extraMode = settings.applyMode !== 'urb';
         for (const r of results) {
-            const base = toWazeCase(r.name);
+            const info = toWazeCaseInfo(r.name);
+            const base = info.name;
             const prefill = applyNameRules(base);
             const div = document.createElement('div');
             div.className = 'wfit-res';
@@ -2832,6 +3617,32 @@
             nameIn.title = 'Nome che verrà scritto su Waze: modificalo liberamente prima di applicare';
             div.appendChild(nameIn);
 
+            // Avvisi della guida "Denominazione delle strade" (lettere puntate e simili)
+            for (const n of info.notes) {
+                const w = document.createElement('div');
+                w.className = 'wfit-hnnote wfit-n-warn';
+                w.textContent = '\u26a0\ufe0f ' + n;
+                div.appendChild(w);
+            }
+            // Strada con sigla: la guida vuole solo la sigla nel nome principale
+            const sg = applyNames(prefill);
+            const atteso = extraMode ? sg.pn : `${sg.pn}, ${r.comune}`;
+            const giaCosi = oraSuWaze.get(atteso) || 0;
+            if (giaCosi) {
+                const ok = document.createElement('div');
+                ok.className = 'wfit-muted';
+                ok.textContent = `\u2713 nome principale gi\u00e0 cos\u00ec su ${giaCosi} di ${captured.size} ${pl(captured.size, 'segmento', 'segmenti')}`;
+                div.appendChild(ok);
+            }
+            if (sg.sigla) {
+                const h = document.createElement('div');
+                h.className = 'wfit-muted';
+                h.textContent = sg.full
+                    ? `Strada con sigla: nome principale "${sg.pn}", nome esteso "${sg.an}" negli alternativi con la citt\u00e0.`
+                    : `Strada con sigla: nome principale "${sg.pn}".`;
+                div.appendChild(h);
+            }
+
             // Suggerimento rapido per il caso classico "Strada Contrada X" -> "Contrada X"
             const m = /^strada\s+((?:contrada|c\.da)\s+.+)$/i.exec(prefill);
             if (m) {
@@ -2846,12 +3657,30 @@
                 div.appendChild(a);
             }
 
-            const info = document.createElement('div');
-            info.innerHTML = `<span class="wfit-muted">Comune: <b>${escapeHtml(r.comune)}</b>` +
+            const infoRow = document.createElement('div');
+            infoRow.innerHTML = `<span class="wfit-muted">Comune: <b>${escapeHtml(r.comune)}</b>` +
                 (r.locality ? ` &middot; Localit&agrave;: ${escapeHtml(toWazeCase(r.locality))}` : '') +
                 ` &middot; ~${Math.round(r.dist)} m &middot; ${r.count} ${pl(r.count, 'civico', 'civici')}` +
                 (r.fileDate ? ` &middot; dati ANNCSU del ${r.fileDate}` : '') + `</span>`;
-            div.appendChild(info);
+            div.appendChild(infoRow);
+
+            // Citta' da scrivere: il comune, oppure la frazione nella forma della guida
+            // "nomefrazione, nomecomune" quando la strada e' nel centro abitato di una frazione
+            const loc = r.locality ? toWazeCase(r.locality) : '';
+            const cityOpts = [r.comune];
+            if (loc && deacc(loc) !== deacc(r.comune)) cityOpts.push(`${loc}, ${r.comune}`);
+            let citySel = null;
+            if (cityOpts.length > 1) {
+                const cr = document.createElement('div');
+                cr.className = 'wfit-muted';
+                cr.textContent = 'Citt\u00e0: ';
+                citySel = document.createElement('select');
+                for (const c of cityOpts) { const o = document.createElement('option'); o.value = c; o.textContent = c; citySel.appendChild(o); }
+                citySel.title = 'Se la strada \u00e8 nel centro abitato di una frazione, la guida vuole la citt\u00e0 nella forma "frazione, comune". '
+                    + 'La localit\u00e0 ANNCSU non \u00e8 sempre una frazione: scegli tu guardando i cartelli di inizio centro abitato.';
+                cr.appendChild(citySel);
+                div.appendChild(cr);
+            }
 
             const readName = () => {
                 const v = nameIn.value.trim();
@@ -2868,7 +3697,7 @@
             bApply.className = 'wfit-btn wfit-primary'; bApply.textContent = 'Applica ai segmenti';
             bApply.addEventListener('click', () => {
                 const v = readName();
-                if (v) applyToSegments(v, r.comune, prefill);
+                if (v) applyToSegments(v, citySel ? citySel.value : r.comune, prefill);
             });
             const numerati = (lastPtsByG.get(r.g) || []).filter(p => p.label).length;
             const bHn = document.createElement('button');
@@ -2888,19 +3717,17 @@
     // Modifiche non salvate nell'editor (il WME vieta i civici su segmenti modificati)
     function unsavedCount() {
         try {
-            if (sdk.Editing && typeof sdk.Editing.getUnsavedChangesCount === 'function') {
-                const n = sdk.Editing.getUnsavedChangesCount();
-                if (typeof n === 'number') return n;
-            }
-        } catch { /* si prova col modello interno */ }
-        try {
-            const W = WME();
-            const am = W && W.model && W.model.actionManager;
-            if (am) {
-                if (typeof am.unsavedActionsNum === 'function') return am.unsavedActionsNum();
-                if (typeof am.getActions === 'function') return (am.getActions() || []).length;
-            }
-        } catch { /* sconosciuto */ }
+            const n = sdk.Editing.getUnsavedChangesCount();
+            return typeof n === 'number' ? n : null;
+        } catch { return null; }
+    }
+
+    // Snapshot, modalita' pratica o editor in sola lettura: qui lo script non deve scrivere
+    // nulla, perche' le modifiche non arriverebbero mai sulla mappa. null = si puo' editare.
+    function editingBlock() {
+        try { if (sdk.Editing.isSnapshotModeOn()) return 'sei in modalit\u00e0 snapshot (vista di ci\u00f2 che \u00e8 live nell\'app): esci dalla snapshot e riprova'; } catch { /* metodo assente */ }
+        try { if (sdk.Editing.isPracticeModeOn()) return 'sei in modalit\u00e0 pratica: le modifiche non verrebbero salvate sulla mappa'; } catch { /* metodo assente */ }
+        try { if (!sdk.Editing.isEditingAllowed()) return 'in questo momento l\'editor non permette modifiche'; } catch { /* metodo assente */ }
         return null;
     }
 
@@ -2910,15 +3737,16 @@
         if (/projected segment|not allowed to add a house number|point is a required/i.test(m)) {
             return 'segmento con modifiche non salvate: salva (Ctrl+S) e ripremi il bottone';
         }
+        if (/not found in data model/i.test(m)) {
+            return 'segmento non pi\u00f9 caricato nell\'editor: torna sulla strada (o riduci lo zoom finch\u00e9 la vedi tutta) e ripremi il bottone';
+        }
         if (/exists|duplicate/i.test(m)) return 'civico gi\u00e0 presente';
         if (/permission|rank|lock/i.test(m)) return 'permessi insufficienti sul segmento';
         return m;
     }
 
     // Come si presenta una riga in forma 20/1, secondo la modalita' scelta dall'utente
-    const suspNote = () => settings.suspMode === 'includi'
-        ? ['ok', 'incluso su tua scelta']
-        : ['warn', '\u26a0\ufe0f non inserito'];
+    const suspNote = () => ['warn', '\u26a0\ufe0f formato non accettato da Waze: va inserito a mano'];
 
     const HN_MAX_D = 45; // Waze rifiuta i civici troppo lontani dal segmento: oltre questo limite si salta
     // Soglia dei civici "sovrapposti": deliberatamente strettissima. Serve a prendere SOLO i punti
@@ -2933,7 +3761,8 @@
     // Il civico numero X esiste gia' su Waze qui vicino? Unico posto in cui si decide.
     function findExistingHN(existing, label, lon, lat) {
         if (!existing || !existing.length) return null;
-        return existing.find(h => h.num === label &&
+        const k = hnKey(label);
+        return existing.find(h => !h.rpp && hnKey(h.num) === k &&
             Math.abs(h.c[0] - lon) < HN_SAME_DEG && Math.abs(h.c[1] - lat) < HN_SAME_DEG &&
             haversine(h.c[0], h.c[1], lon, lat) < HN_SAME_D) || null;
     }
@@ -2946,8 +3775,9 @@
     function findMisplacedHN(existing, label, lon, lat) {
         if (!existing || !existing.length) return null;
         let best = null, bestD = Infinity;
+        const k = hnKey(label);
         for (const h of existing) {
-            if (!h.own || h.num !== label) continue;
+            if (!h.own || h.rpp || hnKey(h.num) !== k) continue;
             const d = haversine(h.c[0], h.c[1], lon, lat);
             if (d < HN_SAME_D) return null; // ce n'e' uno gia' al posto giusto: caso normale
             if (d < bestD) { bestD = d; best = h; }
@@ -2998,33 +3828,34 @@
         return m ? [parseInt(m[1], 10), m[2]] : [0, ''];
     };
 
-    // Un esponente tutto NUMERICO ("2/4", "1/3") e' l'impronta tipica di una colonna del CSV letta
-    // male: un progressivo o un codice interno appiccicato al civico. Puo' anche essere reale,
-    // ma non lo possiamo sapere da qui: si segnala e decide l'utente, che il territorio lo vede.
-    const isSusp = lbl => { const e = splitHn(lbl)[1]; return !!e && /^\d+$/.test(e); };
+    // Formato dei civici su Waze (Wazeopedia Italia, "Numeri civici"): numeri seguiti da al
+    // massimo 2 lettere minuscole, mai una lettera in testa (34a, 3ce, 729ar). Niente barra.
+    // ANNCSU scrive "343/A": su Waze diventa "343a".
+    const HN_WAZE_RE = /^\d{1,5}[a-z]{0,2}$/;
+    function wazeHn(lbl) {
+        const m = /^\s*(\d{1,5})\s*(?:\/?\s*([A-Za-z]{1,2}))?\s*$/.exec(String(lbl == null ? '' : lbl));
+        return m ? m[1] + (m[2] || '').toLowerCase() : null;
+    }
+    // Chiave di confronto fra civici scritti in modi diversi: 18/B, 18B, 18 b -> 18b.
+    // La barra davanti a una cifra resta: "20/1" non deve diventare il civico 201.
+    const hnKey = v => String(v == null ? '' : v).toLowerCase().replace(/\s+/g, '').replace(/\/(?=[a-z])/g, '');
 
-    // Validazione stretta di quello che l'utente scrive nella casella:
-    // "18b" / "18 B" / "18/b" -> "18/B"; solo numero -> com'e'. null se non valido.
+    // Civici che Waze non accetta cosi' come sono: esponente numerico ("20/1", spesso una
+    // colonna del CSV letta male) o di piu' lettere ("12/BIS"). Si mostrano, ma non si inseriscono.
+    const isSusp = lbl => !wazeHn(lbl);
+
+    // Validazione di quello che l'utente scrive nella casella: "18b" / "18 B" / "18/b" -> "18b".
+    // null se Waze non lo accetterebbe.
     function normHn(s) {
-        const m = /^(\d{1,5})(?:\/?([A-Z0-9]{1,4}))?$/.exec(String(s || '').trim().toUpperCase().replace(/\s+/g, ''));
-        if (!m) return null;
-        return m[2] ? m[1] + '/' + m[2] : m[1];
+        const v = wazeHn(s);
+        return v && HN_WAZE_RE.test(v) ? v : null;
     }
 
     function mapCenter() {
-        return firstOk(
-            () => {
-                const c = sdk.Map.getMapCenter();
-                if (!c) return null;
-                if (c.lon != null && c.lat != null) return [c.lon, c.lat];
-                if (c.lonLat && c.lonLat.lon != null) return [c.lonLat.lon, c.lonLat.lat];
-                return null;
-            },
-            () => {
-                const c = WME().map.getCenter();
-                return c ? merc2wgs(c.lon != null ? c.lon : c.x, c.lat != null ? c.lat : c.y) : null;
-            }
-        );
+        try {
+            const c = sdk.Map.getMapCenter();
+            return (c && c.lon != null && c.lat != null) ? [c.lon, c.lat] : null;
+        } catch { return null; }
     }
 
     function nearestCapturedDist(lon, lat) {
@@ -3039,12 +3870,9 @@
         return isFinite(best) ? best : 0;
     }
 
-    // Le due firme conosciute di setMapCenter, provate in ordine. true se una ha funzionato.
     function quickCenter(lon, lat) {
-        return !!firstOk(
-            () => { sdk.Map.setMapCenter({ lonLat: { lon, lat } }); return true; },
-            () => { sdk.Map.setMapCenter({ lon, lat }); return true; }
-        );
+        try { sdk.Map.setMapCenter({ lonLat: { lon, lat } }); return true; }
+        catch { return false; }
     }
 
     // Civici gia' presenti su Waze: prova a caricarli davvero (SDK per-segmento, store, legacy)
@@ -3089,15 +3917,18 @@
         const capIds = new Set(viaIds.map(String));
         // Serve a distinguere il numero 5 di QUESTA via da un 5 qualsiasi caricato in zona su
         // un'altra strada: solo il primo e' un doppione, anche se il punto e' lontano.
+        const segIdOf = h => (h.segmentId != null ? h.segmentId : (h.segID != null ? h.segID : h.segmentID));
         const isOwn = (h, forced) => {
             if (forced) return true;
-            const sid = h.segID != null ? h.segID : (h.segmentId != null ? h.segmentId : h.segmentID);
+            const sid = segIdOf(h);
             return sid != null && capIds.has(String(sid));
         };
         const push = (h, forced) => {
             if (!h) return;
-            const num = h.houseNumber != null ? h.houseNumber : (h.number != null ? h.number : null);
-            let c = (h.point && h.point.coordinates) || (h.geometry && h.geometry.coordinates) || null;
+            // i nomi dei campi sono cambiati fra le versioni dell'SDK: si accettano entrambi
+            const num = h.number != null ? h.number : (h.houseNumber != null ? h.houseNumber : null);
+            let c = (h.geometry && h.geometry.coordinates) || (h.point && h.point.coordinates) || null;
+            // il modello interno del WME tiene le coordinate in metri (Mercator)
             if (!c && h.geometry && h.geometry.x != null && h.geometry.y != null) c = merc2wgs(h.geometry.x, h.geometry.y);
             if (num == null || !c || c.length < 2) return;
             out.push({ num: String(num), c: [c[0], c[1]], own: isOwn(h, forced) });
@@ -3106,31 +3937,123 @@
         const collect = async (arg, forced) => {
             let r = HN.getHouseNumbers(arg);
             if (r && typeof r.then === 'function') r = await r;
-            if (Array.isArray(r)) r.forEach(h => push(h, forced));
+            if (!Array.isArray(r)) return null;
+            r.forEach(h => push(h, forced));
+            return r.length;
         };
-        const hasHN = HN && typeof HN.getHouseNumbers === 'function' && viaIds.length;
-        // Firma documentata dell'SDK: getHouseNumbers({ segmentIds }) -> Promise<HouseNumber[]>,
-        // con { id, number, segmentId, geometry }. Chiesti per TUTTA la via: qualunque cosa
-        // torni e' roba di questa strada, quindi vale come doppione ovunque si trovi.
-        try { if (hasHN) await collect({ segmentIds: viaIds }, true); }
-        catch { /* sorgente successiva */ }
-        // il giro per segmento serve solo se la chiamata in blocco non ha dato nulla
-        if (hasHN && !out.length) {
-            for (const id of viaIds) {
-                try { await collect({ segmentId: id }, true); }
-                catch { break; /* firma non supportata */ }
-            }
+        // SOLO i segmenti davvero caricati: un id scaricato dall'editor fa fallire l'intera
+        // richiesta ("segment ... not found in data model"), e il confronto salterebbe in
+        // silenzio facendo ricomparire come mancanti civici che su Waze ci sono gia'.
+        const nums = viaIds.map(Number).filter(n => !isNaN(n) && segmentoCaricato(n));
+        const scaricati = viaIds.length - nums.length;
+        const hasHN = HN && typeof HN.getHouseNumbers === 'function' && nums.length;
+        // Waze sa gia' se un segmento ha civici: se ne ha e noi non ne leggiamo nessuno,
+        // la lettura non ha funzionato e NON si deve dire "nessun civico".
+        let attesi = 0;
+        for (const id of nums) {
+            try { const sg = sdk.DataModel.Segments.getById({ segmentId: id }); if (sg && sg.hasHouseNumbers) attesi++; }
+            catch { /* prossimo */ }
         }
-        lastHNScan = { hn: 0, segs: viaIds.length };
-        log(`civici gia' su Waze: ${out.length} letti su ${viaIds.length} segmenti della stessa via ` +
-            `(${captured.size} in lista)`);
-        try { if (HN && typeof HN.getAll === 'function') (HN.getAll() || []).forEach(h => push(h)); } catch { /* oltre */ }
+
+        // Il controllo dei doppioni e' troppo importante per fidarsi di una sola strada: si
+        // provano tutte le sorgenti note, dalla piu' precisa alla piu' generica, e si va avanti
+        // finche' una non risponde davvero. Se NESSUNA risponde non si dice "nessun civico":
+        // si avvisa che il confronto non e' stato fatto.
+        const sorgenti = [
+            ['SDK, tutta la via in blocco', async () => hasHN ? collect({ segmentIds: nums }, true) : null],
+            ['SDK, segmento per segmento', async () => {
+                if (!hasHN) return null;
+                let tot = null, errori = 0;
+                for (const id of nums) {
+                    // un segmento che fallisce non deve far saltare tutti gli altri
+                    try {
+                        const n = await collect({ segmentIds: [id] }, true);
+                        if (n != null) tot = (tot || 0) + n;
+                    } catch { errori++; }
+                }
+                if (errori) log(`civici esistenti: ${errori} ${pl(errori, 'segmento non leggibile', 'segmenti non leggibili')} su ${nums.length}`);
+                return tot;
+            }],
+            ['SDK, firma segmentId singolo', async () => {
+                if (!hasHN) return null;
+                let tot = null;
+                for (const id of nums) {
+                    try {
+                        const n = await collect({ segmentId: id }, true);
+                        if (n != null) tot = (tot || 0) + n;
+                    } catch { /* prossimo segmento */ }
+                }
+                return tot;
+            }],
+        ];
+        const locali = [
+            ['SDK, tutti i civici caricati', async () => {
+                if (!HN || typeof HN.getAll !== 'function') return null;
+                const r = HN.getAll();
+                if (!Array.isArray(r)) return null;
+                r.forEach(h => push(h, false));
+                return r.length;
+            }],
+            ['modello del WME', async () => {
+                const W = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).W;
+                const repo = W && W.model && W.model.segmentHouseNumbers;
+                const arr = repo && typeof repo.getObjectArray === 'function' ? repo.getObjectArray() : null;
+                if (!Array.isArray(arr)) return null;
+                arr.forEach(o => push(o && (o.attributes || o), false));
+                return arr.length;
+            }]
+        ];
+        let ok = false, come = '', letti = 0;
+        for (const [nome, fn] of sorgenti) {
+            let n = null;
+            try { n = await fn(); }
+            catch (e) { log('civici esistenti \u00b7 ' + nome + ' KO', e); continue; }
+            if (n == null) continue;          // sorgente non disponibile su questo editor
+            ok = true; come = nome; letti = n;
+            if (out.length) break;            // qualcosa di utile e' arrivato: basta cosi'
+        }
+        // Le sorgenti qui sopra leggono quello che il WME ha gia' salvato. I civici appena
+        // aggiunti (tuoi o di un altro script) stanno solo nel modello locale: si aggiungono
+        // SEMPRE, altrimenti un civico inserito e non ancora salvato tornerebbe nell'elenco
+        // come mancante, con la spunta.
+        for (const [nome, fn] of locali) {
+            try { const n = await fn(); if (n != null) { ok = true; if (!come) come = nome; letti += n; } }
+            catch (e) { log('civici esistenti \u00b7 ' + nome + ' KO', e); }
+        }
+        // Controllo di validita' PRIMA di aggiungere i civici inseriti da noi in questa sessione:
+        // altrimenti i nostri stessi inserimenti maschererebbero una lettura fallita.
+        // se Waze dice che su questi segmenti ci sono civici e noi non ne abbiamo letto
+        // nemmeno uno, il confronto NON e' valido
+        const civiciLetti = out.filter(h => h.own).length;
+        if (attesi > 0 && civiciLetti === 0) {
+            ok = false;
+            log(`civici esistenti: ${attesi} ${pl(attesi, 'segmento ha', 'segmenti hanno')} civici secondo il WME, ma non se n'e' letto nessuno`);
+        }
+        // ultima rete: quello che ha inserito lo script in questa sessione
+        const vieOra = viaStreetIds(viaIds);
+        for (const h of civiciInseriti) {
+            const stessaVia = (h.segId != null && capIds.has(String(h.segId)))
+                || (h.streets && [...h.streets].some(x => vieOra.has(String(x))));
+            if (stessaVia) out.push({ num: h.num, c: h.c, own: true });
+        }
+        lastHNScan = { hn: 0, segs: nums.length, rpp: 0, ok, come, scaricati, attesi };
+        log(`civici gia' su Waze: ${out.length} utili su ${letti} letti, ${nums.length}/${viaIds.length} segmenti caricati della stessa via ` +
+            `(${captured.size} in lista)${ok ? ' \u00b7 sorgente: ' + come : ' \u00b7 LETTURA NON RIUSCITA'}`);
+        // Luoghi residenziali (RPP) della stessa via: per la guida un indirizzo gia' fatto come RPP
+        // non va inserito anche come civico normale
         try {
-            const W = WME();
-            const repo = W.model && W.model.segmentHouseNumbers;
-            const arr = repo && typeof repo.getObjectArray === 'function' ? repo.getObjectArray() : null;
-            if (arr) arr.forEach(o => push(o && (o.attributes || o)));
-        } catch { /* pazienza */ }
+            const streets = viaStreetIds(viaIds);
+            for (const v of (sdk.DataModel.Venues.getAll() || [])) {
+                if (!v || !v.isResidential) continue;
+                let ad = null;
+                try { ad = sdk.DataModel.Venues.getAddress({ venueId: v.id }); } catch { continue; }
+                if (!ad || !ad.houseNumber || !ad.street || !streets.has(String(ad.street.id))) continue;
+                const c = venuePoint(v);
+                if (!c) continue;
+                out.push({ num: String(ad.houseNumber), c, own: true, rpp: true });
+                lastHNScan.rpp++;
+            }
+        } catch { /* modello dei luoghi non disponibile */ }
         const seen = new Map();
         const uniq = [];
         for (const h of out) {
@@ -3140,8 +4063,282 @@
             seen.set(k, h);
             uniq.push(h);
         }
-        lastHNScan.hn = uniq.filter(h => h.own).length;
+        lastHNScan.hn = uniq.filter(h => h.own && !h.rpp).length;
         return uniq;
+    }
+
+    // ID delle vie (primario e alternativi) dei segmenti indicati
+    function viaStreetIds(segIds) {
+        const out = new Set();
+        for (const id of segIds) {
+            try {
+                const seg = sdk.DataModel.Segments.getById({ segmentId: Number(id) });
+                if (!seg) continue;
+                if (seg.primaryStreetId != null) out.add(String(seg.primaryStreetId));
+                for (const a of (seg.alternateStreetIds || [])) if (a != null) out.add(String(a));
+            } catch { /* prossimo */ }
+        }
+        return out;
+    }
+
+    // Punto di un luogo: il punto stesso, o il centro del poligono
+    function venuePoint(v) {
+        const g = v && v.geometry;
+        if (!g || !g.coordinates) return null;
+        if (g.type === 'Point') return g.coordinates;
+        const ring = g.type === 'Polygon' ? g.coordinates[0] : null;
+        if (!ring || !ring.length) return null;
+        let x = 0, y = 0;
+        for (const q of ring) { x += q[0]; y += q[1]; }
+        return [x / ring.length, y / ring.length];
+    }
+
+    // Segmenti caricati divisi in "della via" e "di altre vie con nome". Servono a due cose:
+    // agganciare il civico al segmento giusto (addHouseNumber con segmentId) e accorgersi degli
+    // accessi che stanno su un'altra strada, che per la guida vanno fatti come RPP.
+    const RT_RAMP = 4;
+    // Un segmento in lista puo' non essere piu' nel modello: l'editor scarica quello che esce
+    // dalla vista. Un id scaricato passato a addHouseNumber fa fallire l'inserimento
+    // ("segment ... not found in data model"), quindi qui si tiene solo cio' che c'e' davvero.
+    function segmentoCaricato(id) {
+        try { return !!sdk.DataModel.Segments.getById({ segmentId: Number(id) }); }
+        catch { return false; }
+    }
+
+    // Nomi della via su cui stiamo lavorando: quelli dei segmenti in lista (primario e
+    // alternativi) piu' l'odonimo ANNCSU. Servono perche' lo stesso nome puo' avere piu' ID
+    // diversi (con citta' e senza, frazioni, tronconi creati in momenti diversi): senza questo
+    // controllo un troncone della STESSA via verrebbe scambiato per un'altra strada.
+    function nomiDellaVia(viaIds, odonimo) {
+        const out = new Set();
+        const add = n => { const k = deacc(String(n || '')).replace(/[^a-z0-9]+/g, ''); if (k) out.add(k); };
+        if (odonimo) add(odonimo);
+        for (const id of viaIds) {
+            try {
+                const seg = sdk.DataModel.Segments.getById({ segmentId: Number(id) });
+                if (!seg) continue;
+                if (seg.primaryStreetId != null) add(streetNameById(seg.primaryStreetId));
+                for (const a of (seg.alternateStreetIds || [])) if (a != null) add(streetNameById(a));
+            } catch { /* prossimo */ }
+        }
+        return out;
+    }
+
+    function hnSegmentContext(odonimo) {
+        const viaIds = new Set(sameStreetSegmentIds().map(String));
+        const nomiVia = nomiDellaVia(viaIds, odonimo);
+        const stessoNome = n => {
+            const k = deacc(String(n || '')).replace(/[^a-z0-9]+/g, '');
+            return !!k && nomiVia.has(k);
+        };
+        const own = [], other = [];
+        let all = [];
+        try { all = sdk.DataModel.Segments.getAll() || []; } catch { /* sotto */ }
+        for (const sg of all) {
+            const c = sg && sg.geometry && sg.geometry.coordinates;
+            if (!c || c.length < 2) continue;
+            if (viaIds.has(String(sg.id))) { own.push({ id: sg.id, c }); continue; }
+            if (sg.primaryStreetId == null || sg.isDrivable === false || sg.roadType === RT_RAMP) continue;
+            // stesso nome = stessa via, anche se l'ID della strada e' diverso (citta' diversa,
+            // frazione, troncone creato a parte): va fra i "nostri", non fra gli accessi altrui
+            if (stessoNome(streetNameById(sg.primaryStreetId))) { own.push({ id: sg.id, c }); continue; }
+            other.push({ id: sg.id, c, street: sg.primaryStreetId });
+        }
+        // i segmenti della lista non piu' caricati entrano solo come geometria (id a null):
+        // servono a capire la distanza, ma non si possono usare per agganciare il civico
+        for (const [id, v] of captured) {
+            if (!v || !v.coords || v.coords.length < 2) continue;
+            if (own.some(o => sameId(o.id, id))) continue;
+            own.push({ id: segmentoCaricato(id) ? id : null, c: v.coords });
+        }
+        return { own, other };
+    }
+
+    // Segmento piu' vicino a un punto: { id, d, street } oppure null
+    function nearestSeg(segs, lon, lat) {
+        if (!segs) return null;
+        const cosLat = Math.cos(lat * Math.PI / 180);
+        let best = null;
+        for (const sg of segs) {
+            let inBox = false;
+            for (const q of sg.c) { if (Math.abs(q[0] - lon) < 0.003 && Math.abs(q[1] - lat) < 0.002) { inBox = true; break; } }
+            if (!inBox) continue;
+            const d = distPointToPolyline(lon, lat, sg.c, cosLat);
+            if (!best || d < best.d) best = { id: sg.id, d, street: sg.street };
+        }
+        return best;
+    }
+
+    // Segmenti in fila, dal primo all'ultimo, con il verso di percorrenza. null se non formano
+    // una strada unica senza diramazioni (incroci a T fra tronconi con lo stesso nome, buchi).
+    function orderChain(ids) {
+        const S = sdk.DataModel.Segments;
+        const segs = [];
+        for (const id of ids) {
+            try { const sg = S.getById({ segmentId: Number(id) }); if (sg && sg.fromNodeId != null && sg.toNodeId != null && sg.geometry) segs.push(sg); }
+            catch { return null; }
+        }
+        if (!segs.length) return null;
+        const deg = new Map();
+        for (const sg of segs) for (const nd of [sg.fromNodeId, sg.toNodeId]) deg.set(nd, (deg.get(nd) || 0) + 1);
+        if ([...deg.values()].some(v => v > 2)) return null;
+        const ends = [...deg.entries()].filter(([, v]) => v === 1).map(([nd]) => nd);
+        if (ends.length !== 2) return null;
+        const out = [];
+        const used = new Set();
+        let node = ends[0];
+        while (out.length < segs.length) {
+            const sg = segs.find(x => !used.has(x.id) && (x.fromNodeId === node || x.toNodeId === node));
+            if (!sg) return null;
+            used.add(sg.id);
+            const rev = sg.toNodeId === node;
+            out.push({ id: sg.id, rev, c: sg.geometry.coordinates });
+            node = rev ? sg.fromNodeId : sg.toNodeId;
+        }
+        return out;
+    }
+
+    // Posizione di un punto rispetto a una linea percorsa nel suo verso: metri dall'inizio e lato
+    // (+1 sinistra, -1 destra, 0 praticamente sopra la linea)
+    function alongSide(c, lon, lat) {
+        const k = Math.cos(lat * Math.PI / 180) * 111320, h = 110540;
+        let best = null, acc = 0;
+        for (let i = 0; i < c.length - 1; i++) {
+            const ax = c[i][0] * k, ay = c[i][1] * h, bx = c[i + 1][0] * k, by = c[i + 1][1] * h;
+            const px = lon * k, py = lat * h;
+            const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1e-9;
+            let t = ((px - ax) * dx + (py - ay) * dy) / (L * L);
+            t = Math.max(0, Math.min(1, t));
+            const qx = ax + t * dx, qy = ay + t * dy;
+            const d = Math.hypot(px - qx, py - qy);
+            if (!best || d < best.d) {
+                const cross = dx * (py - ay) - dy * (px - ax);
+                best = { d, along: acc + t * L, side: d < 1 ? 0 : Math.sign(cross) };
+            }
+            acc += L;
+        }
+        return best ? { along: best.along, side: best.side, len: acc } : null;
+    }
+
+    // Anteprima dei due errori "forzabili" della guida Numeri civici: civico dal lato opposto
+    // agli altri della stessa parita' e civico fuori sequenza. Si controlla solo quando il quadro
+    // e' chiaro (strada unica, dispari e pari su lati opposti, maggioranze nette) e mai nelle
+    // piazze, dove la numerazione gira intorno e la guida avverte che i falsi allarmi sono normali.
+    function annotateNumbering(ctx) {
+        if (/^(piazza|piazzale|largo|piazzetta|slargo)\b/i.test(String(ctx.rName || '').trim())) return 0;
+        const cand = ctx.rows.filter(x => !x.p.manual && x.p.segId != null && /^\d+/.test(x.p.label));
+        if (cand.length < 6) return 0;
+        const ids = [...new Set(cand.map(x => String(x.p.segId)))];
+        const chain = orderChain(ids);
+        let offset = 0;
+        const pos = new Map();
+        const place = (x, segEntry, off) => {
+            const a = alongSide(segEntry.c, x.p.lon, x.p.lat);
+            if (!a) return;
+            pos.set(x, { along: off + (segEntry.rev ? a.len - a.along : a.along), side: segEntry.rev ? -a.side : a.side });
+        };
+        if (chain) {
+            const offOf = new Map();
+            for (const e of chain) {
+                offOf.set(String(e.id), { e, off: offset });
+                const a = alongSide(e.c, e.c[0][0], e.c[0][1]);
+                offset += a ? a.len : 0;
+            }
+            for (const x of cand) { const o = offOf.get(String(x.p.segId)); if (o) place(x, o.e, o.off); }
+        } else if (ids.length === 1) {
+            const c = segGeometry(Number(ids[0]));
+            if (c) for (const x of cand) place(x, { c, rev: false }, 0);
+        } else return 0;
+
+        const num = x => parseInt(x.p.label, 10);
+        const gruppi = [cand.filter(x => num(x) % 2 === 1), cand.filter(x => num(x) % 2 === 0)];
+        const maggioranza = g => {
+            const lati = g.map(x => (pos.get(x) || {}).side).filter(v => v);
+            if (lati.length < 3) return 0;
+            const sx = lati.filter(v => v > 0).length;
+            if (sx / lati.length >= 0.75) return 1;
+            if ((lati.length - sx) / lati.length >= 0.75) return -1;
+            return 0;
+        };
+        const mDisp = maggioranza(gruppi[0]), mPari = maggioranza(gruppi[1]);
+        const flagged = new Map();
+        // lato: solo se dispari e pari stanno davvero su lati opposti
+        if (mDisp && mPari && mDisp !== mPari) {
+            gruppi.forEach((g, gi) => {
+                const m = gi === 0 ? mDisp : mPari;
+                for (const x of g) { const q = pos.get(x); if (q && q.side && q.side !== m) flagged.set(x, gi === 0 ? 'lato dei pari' : 'lato dei dispari'); }
+            });
+        }
+        // sequenza: solo con la strada in fila dall'inizio alla fine
+        if (chain) {
+            for (const g of gruppi) {
+                const seq = g.filter(x => pos.has(x)).sort((a, b) => pos.get(a).along - pos.get(b).along);
+                if (seq.length < 4) continue;
+                const lis = (arr, cmp) => {
+                    const n = arr.length, len = new Array(n).fill(1), prev = new Array(n).fill(-1);
+                    let bi = 0;
+                    for (let i = 0; i < n; i++) {
+                        for (let j = 0; j < i; j++) if (cmp(num(arr[j]), num(arr[i])) && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
+                        if (len[i] > len[bi]) bi = i;
+                    }
+                    const keep = new Set();
+                    for (let i = bi; i >= 0; i = prev[i]) keep.add(arr[i]);
+                    return keep;
+                };
+                const up = lis(seq, (a, b) => a <= b), down = lis(seq, (a, b) => a >= b);
+                const keep = up.size >= down.size ? up : down;
+                if (keep.size / seq.length < 0.7) continue;   // quadro confuso: meglio tacere
+                for (const x of seq) if (!keep.has(x) && !flagged.has(x)) flagged.set(x, 'fuori sequenza');
+            }
+        }
+        let n = 0;
+        for (const [x, perche] of flagged) {
+            if (!x.cb.checked) continue;   // riga gia' senza spunta per un altro motivo
+            x.cb.checked = false;
+            x.p.seq = perche;
+            x.row.classList.add('wfit-hnseq');
+            x.setNote('seq', perche === 'fuori sequenza'
+                ? 'fuori sequenza rispetto ai vicini: Waze lo contester\u00e0 al salvataggio'
+                : `sul ${perche}: Waze lo contester\u00e0 come "lato errato"`);
+            x.row.title = 'Rispetto agli altri civici della via questo numero sembra ' + (perche === 'fuori sequenza' ? 'fuori ordine' : 'dal lato sbagliato')
+                + '. Spesso \u00e8 un punto ANNCSU messo male. Controlla su Street View: se \u00e8 giusto, spuntalo e al salvataggio '
+                + 'Waze chieder\u00e0 di forzarlo (guida Numeri civici, errori forzabili); se \u00e8 sbagliato, lascialo fuori.';
+            n++;
+        }
+        if (n) ctx.addLegend('<span class="wfit-swatch wfit-sw-seq"></span> lato o sequenza insoliti');
+        return n;
+    }
+
+    // Per ogni riga: a quale segmento della via va agganciato il civico, e se l'accesso sta
+    // invece su un'altra strada con nome (piu' vicina di almeno 2 m).
+    const nameCache = new Map();
+    function annotateAccessStreet(ctx, segCtx) {
+        nameCache.clear();
+        let n = 0;
+        for (const x of ctx.rows) {
+            const own = nearestSeg(segCtx.own, x.p.lon, x.p.lat);
+            x.p.segId = own ? own.id : null;
+            if (x.p.manual || !own) continue;
+            const oth = nearestSeg(segCtx.other, x.p.lon, x.p.lat);
+            if (!oth || oth.d + 2 >= own.d) continue;
+            const k = String(oth.street);
+            if (!nameCache.has(k)) nameCache.set(k, streetNameById(oth.street));
+            if (!nameCache.get(k)) continue;   // strada senza nome: niente civici, niente RPP
+            // ultimo controllo: se si chiama come la via su cui stai lavorando non e' un'altra via
+            if (nomeUguale(nameCache.get(k), ctx.rName ? toWazeCase(ctx.rName) : '')) continue;
+            x.p.altro = { nome: nameCache.get(k), d: Math.round(oth.d), segId: oth.id };
+            x.cb.checked = false;
+            x.row.classList.add('wfit-hnrpp');
+            x.setNote('rpp', `accesso su ${x.p.altro.nome} (~${x.p.altro.d} m): per la guida va fatto come luogo residenziale (RPP), non come civico`);
+            x.row.title = `Il punto ANNCSU di questo civico \u00e8 a ~${x.p.altro.d} m da ${x.p.altro.nome} e a ~${Math.round(own.d)} m dalla sua strada. `
+                + 'Se l\'ingresso \u00e8 davvero su un\'altra via (controviale, casa con accesso laterale), la guida Numeri civici della '
+                + 'Wazeopedia Italia chiede un luogo residenziale (Residential Point Place, RPP: un Place di categoria Residenziale '
+                + 'con via e numero civico e il punto di arrivo sull\'ingresso), non un civico normale. '
+                + 'Controlla su Street View: se l\'ingresso \u00e8 sulla sua strada, spuntalo pure.';
+            n++;
+        }
+        if (n) ctx.addLegend('<span class="wfit-swatch wfit-sw-rpp"></span> accesso su un\'altra via: serve un luogo residenziale (RPP)');
+        return n;
     }
 
     /* ------------------------------------------------------------------ */
@@ -3220,12 +4417,14 @@
     // Spiegazione della riga, diversa a seconda di come e' arrivato quel civico
     function hnRowTitle(p) {
         const base = p.susp
-            ? 'Numero in forma numero/numero ("2/4"): pu\u00f2 essere un civico reale, un intervallo scritto male o una colonna del CSV letta male. Di base non viene inserito. Se sul posto esiste davvero cosi\', spuntalo; per trattarli tutti allo stesso modo usa la barra sopra la lista.'
+            ? `Waze accetta solo numeri seguiti da al massimo due lettere minuscole (34a, 3ce): "${p.label}" cos\u00ec non si pu\u00f2 inserire. `
+                + 'Se sul posto il civico \u00e8 davvero questo, va inserito a mano seguendo la guida Numeri civici della Wazeopedia. '
+                + 'Se hai verificato che il numero giusto \u00e8 un altro, correggilo nella casella e spuntalo.'
             : p.ovl
             ? `Questo civico sta sulla stessa coordinata di altri ${p.ovlN - 1} (meno di ${HN_OVERLAP_TXT} m): sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono. Per questo il gruppo arriva senza spunta e la scelta la fai tu: guarda il posto su Street View e spunta quelli che esistono davvero \u2014 anche piu\' di uno, se sul posto ci sono davvero piu\' ingressi. Quelli che inserisci nascono tutti in questo punto: poi vanno TRASCINATI uno per uno sull\'ingresso giusto, prima di salvare. Clic sulla riga per centrare la mappa.`
             : p.dup
             ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
-            : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).';
+            : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18b).';
         return base + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
     }
 
@@ -3236,17 +4435,17 @@
     function addHnRow(p, ctx) {
         const row = document.createElement('div');
         p.susp = !p.manual && isSusp(p.label);
-        row.className = 'wfit-hnrow' + (p.susp && settings.suspMode !== 'includi' ? ' wfit-hnsusp'
-            : p.susp ? ' wfit-hnok' : p.ovl ? ' wfit-hnovl' : p.dup ? ' wfit-hndup' : '');
+        row.className = 'wfit-hnrow' + (p.susp ? ' wfit-hnsusp' : p.ovl ? ' wfit-hnovl' : p.dup ? ' wfit-hndup' : '');
         row.title = hnRowTitle(p);
 
-        // ripetizioni, civici sovrapposti e numeri in forma 20/1 arrivano senza spunta: restano
-        // visibili e spuntabili a mano, ma di loro iniziativa non finiscono su Waze
+        // ripetizioni, civici sovrapposti e numeri che Waze non accetta arrivano senza spunta:
+        // restano visibili, ma di loro iniziativa non finiscono su Waze
         const cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.checked = !p.dup && !p.ovl && !(p.susp && settings.suspMode !== 'includi');
+        cb.type = 'checkbox'; cb.checked = !p.dup && !p.ovl && !p.susp;
         if (p.susp && settings.suspMode === 'escludi') row.style.display = 'none';
         const inp = document.createElement('input');
-        inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.label;
+        // nella casella c'e' gia' il numero come lo vuole Waze (343/A -> 343a)
+        inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.manual ? p.label : (wazeHn(p.label) || p.label);
         inp.addEventListener('input', () => {
             inp.classList.remove('wfit-bad-in');
             // il numero e' cambiato: quello che sapevamo del civico gia' su Waze non vale piu'
@@ -3256,6 +4455,21 @@
         dist.textContent = p.manual ? 'aggiunto da te' : `~${Math.round(p.d)} m`;
         const top = document.createElement('div'); top.className = 'wfit-hntop';
         top.appendChild(cb); top.appendChild(inp); top.appendChild(dist);
+        const sv = document.createElement('button');
+        sv.type = 'button'; sv.className = 'wfit-sv'; sv.innerHTML = SV_ICON;
+        sv.title = 'Apri Street View su questo civico';
+        sv.addEventListener('click', ev => { ev.stopPropagation(); openStreetView(p.lon, p.lat); });
+        top.appendChild(sv);
+        // RPP: compare SOLO sulle righe in cui l'accesso sembra su un'altra strada (classe
+        // wfit-hnrpp, messa da annotateAccessStreet). Lo crea lo script, poi controlli e salvi tu.
+        const rppBtn = document.createElement('button');
+        rppBtn.type = 'button'; rppBtn.className = 'wfit-sv wfit-rppbtn'; rppBtn.textContent = 'RPP';
+        rppBtn.title = 'Crea qui un luogo residenziale (RPP): Place residenziale con questa via e questo numero, '
+            + 'e punto di arrivo sull\'accesso. Serve quando l\'ingresso \u00e8 su una strada diversa da quella dell\'indirizzo '
+            + '(controviali, case con ingresso laterale), come chiede la guida Numeri civici.';
+        rppBtn.addEventListener('click', ev => { ev.stopPropagation(); creaRPP(p, ctx.r, ctx); });
+        top.appendChild(rppBtn);
+        row.wfitP = p;
         const note = document.createElement('div'); note.className = 'wfit-hnnote';
         row.appendChild(top); row.appendChild(note);
 
@@ -3269,7 +4483,7 @@
         else if (p.dup) setNote('dup', `stesso numero, punto ${p.rep} \u00b7 ${Math.round(p.twinD || 0)} m dal punto 1`);
         else setNote('', '');
 
-        row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp && ev.target.tagName !== 'A') quickCenter(p.lon, p.lat); });
+        row.addEventListener('click', ev => { if (ev.target !== cb && ev.target !== inp && ev.target !== sv && ev.target !== rppBtn && !ev.target.closest('button') && ev.target.tagName !== 'A') quickCenter(p.lon, p.lat); });
         cb.addEventListener('change', () => {
             // civici sulla stessa coordinata: la scelta e' libera, se ne possono spuntare anche
             // piu' di uno. Ma se ne prendi due o piu' nascono uno sopra l'altro, quindi lo si
@@ -3289,19 +4503,123 @@
         return row;
     }
 
+    // Icona del bottone Street View: un occhio (disegno originale, colore dal tema del pannello)
+    const SV_ICON = '<svg width="16" height="12" viewBox="0 0 16 12" aria-hidden="true">'
+        + '<path d="M1 6c1.8-3.3 4.3-5 7-5s5.2 1.7 7 5c-1.8 3.3-4.3 5-7 5S2.8 9.3 1 6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>'
+        + '<circle cx="8" cy="6" r="2.6" fill="currentColor"/><circle cx="9" cy="5" r=".8" fill="#fff"/></svg>';
+
+    // Street View sul punto: si centra la mappa e si apre il pannello con il modulo StreetView
+    // dell'SDK. Se la firma con il punto non c'e', il pannello si apre sul centro mappa.
+    async function openStreetView(lon, lat) {
+        quickCenter(lon, lat);
+        try { await sdk.StreetView.open({ lonLat: { lon, lat } }); return; } catch { /* firma senza punto */ }
+        try { await sdk.StreetView.open(); } catch {
+            toast('Street View non si apre da script in questa versione del WME: trascina l\'omino sul punto centrato.', 7000);
+        }
+    }
+
+    // Punto sulla linea piu' vicino a un punto dato (per il punto di arrivo sull'accesso)
+    function projectOnLine(c, lon, lat) {
+        const k = Math.cos(lat * Math.PI / 180) * 111320, h = 110540;
+        let best = null;
+        for (let i = 0; i < c.length - 1; i++) {
+            const ax = c[i][0] * k, ay = c[i][1] * h, bx = c[i + 1][0] * k, by = c[i + 1][1] * h;
+            const px = lon * k, py = lat * h;
+            const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1e-9;
+            let t = ((px - ax) * dx + (py - ay) * dy) / L2;
+            t = Math.max(0, Math.min(1, t));
+            const qx = ax + t * dx, qy = ay + t * dy;
+            const d = Math.hypot(px - qx, py - qy);
+            if (!best || d < best.d) best = { d, p: [qx / k, qy / h] };
+        }
+        return best ? best.p : null;
+    }
+
+    // Crea un luogo residenziale (RPP) per un indirizzo il cui accesso sta su un'altra strada,
+    // come chiede la guida Numeri civici: Place residenziale nel punto del civico, via e numero
+    // dell'odonimo ANNCSU, punto di arrivo sulla strada dell'accesso.
+    function rppSupportato() {
+        const V = sdk.DataModel && sdk.DataModel.Venues;
+        return !!(V && typeof V.addVenue === 'function' && typeof V.updateAddress === 'function');
+    }
+
+    function creaRPP(p, r, ctx) {
+        const V = sdk.DataModel.Venues;
+        const blocco = editingBlock();
+        if (blocco) { toast(`Niente RPP: ${blocco}.`, 9000); return; }
+        // la via dell'indirizzo: quella del segmento ANNCSU, non quella dell'accesso
+        let streetId = null;
+        try { const st = segAddressState(p.segId); streetId = st.pn; } catch { /* sotto */ }
+        if (streetId == null) { toast('Non riesco a capire la via di questo civico: prima premi "Applica ai segmenti" e salva.', 9000); return; }
+        const num = normHn(p.label);
+        if (!num) { toast('Numero non valido per un RPP: Waze accetta un numero seguito da al massimo 2 lettere.', 8000); return; }
+        const viaTxt = streetLabel(streetId);
+        if (!confirm(`Creo un luogo residenziale (RPP) qui:\n\n\u2022 indirizzo: ${viaTxt} ${num}\n`
+            + `\u2022 punto del Place: sul civico ANNCSU\n`
+            + `\u2022 punto di arrivo: ${p.altro ? 'su ' + p.altro.nome : 'sulla strada pi\u00f9 vicina'}\n\n`
+            + 'Poi controlla e salva tu (Ctrl+S). Procedo?')) return;
+        let venueId = null;
+        try {
+            venueId = String(V.addVenue({ category: 'RESIDENTIAL', geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
+        } catch (e) { toast('Creazione del luogo non riuscita: ' + errText(e), 9000); return; }
+        const passi = [];
+        try { V.updateAddress({ venueId, addressData: { streetId, houseNumber: num } }); }
+        catch (e) {
+            try { V.updateAddress({ venueId, streetId, houseNumber: num }); }   // firma precedente
+            catch { passi.push('via e numero civico'); log('RPP: indirizzo KO', e); }
+        }
+        try { if (typeof V.updateVenueIsResidential === 'function') V.updateVenueIsResidential({ venueId, isResidential: true }); }
+        catch (e) { log('RPP: flag residenziale KO', e); }
+        // punto di arrivo sull'accesso reale
+        try {
+            let dest = null;
+            if (p.altro && p.altro.segId) {
+                const c = segGeometry(p.altro.segId);
+                if (c) dest = projectOnLine(c, p.lon, p.lat);
+            }
+            if (dest && typeof V.replaceNavigationPoints === 'function') {
+                V.replaceNavigationPoints({ venueId, navigationPoints: [{ point: { type: 'Point', coordinates: dest }, isPrimary: true }] });
+            } else if (p.altro) passi.push('punto di arrivo');
+        } catch (e) { passi.push('punto di arrivo'); log('RPP: punto di arrivo KO', e); }
+
+        logEvent('rpp', {
+            esito: 'inserito', motivo: passi.length ? 'da completare a mano: ' + passi.join(', ') : '',
+            comune: r.comune || '', localita: r.locality || '', odonimo: toWazeCase(r.name), civico: num,
+            permalink: permalink(p.lon, p.lat, p.segId),
+            lat: Number(p.lat.toFixed(7)), lon: Number(p.lon.toFixed(7)), dataset: r.fileDate || ''
+        });
+        flushLogs();
+        // la riga esce dall'elenco: l'indirizzo ora e' l'RPP, non va anche come civico
+        if (ctx) {
+            const row = ctx.rows.find(x => x.p === p);
+            if (row) {
+                row.cb.checked = false;
+                row.p.rpp = true;
+                row.row.classList.remove('wfit-hnrpp');   // fatto: via il bottone
+                row.row.classList.add('wfit-hnwaze');
+                row.setNote('rpp', `RPP creato: ${viaTxt} ${num} \u00b7 controlla e salva`);
+                ctx.updateGo();
+            }
+        }
+        quickCenter(p.lon, p.lat);
+        toast(passi.length
+            ? `Luogo residenziale creato, ma ${passi.join(' e ')} ${pl(passi.length, 'va impostato', 'vanno impostati')} a mano nel pannello del Place. Poi salva.`
+            : `Luogo residenziale creato: ${viaTxt} ${num}. \u00c8 selezionato sulla mappa: controlla nome e punto di arrivo, poi salva.`, 12000);
+    }
+
     // Civico trovato su Street View: lo scrivi tu e nasce alla posizione attuale del centro mappa
     function buildHnAddBox(ctx) {
         const addBox = document.createElement('div');
         addBox.className = 'wfit-hnadd';
         const addIn = document.createElement('input');
-        addIn.type = 'text'; addIn.placeholder = 'es. 18/B (da Street View)';
+        addIn.type = 'text'; addIn.placeholder = 'es. 18b (da Street View)';
         const addBtn = document.createElement('button');
         addBtn.className = 'wfit-btn'; addBtn.textContent = '+ Aggiungi al centro mappa';
         addBtn.title = 'Centra prima la mappa sul portone (clic su un civico vicino e poi trascina), scrivi il numero e premi: la riga nasce l\u00ec, gi\u00e0 spuntata';
         addBox.appendChild(addIn); addBox.appendChild(addBtn);
         const doAdd = () => {
             const v = normHn(addIn.value);
-            if (!v) { toast('Numero non valido: usa formati come 18, 18/B, 12/BIS.'); addIn.focus(); return; }
+            if (!v) { toast('Numero non valido: Waze accetta un numero seguito da al massimo 2 lettere (18, 18b, 7ab).'); addIn.focus(); return; }
             const c = mapCenter();
             if (!c) { toast('Non riesco a leggere il centro mappa in questa versione del WME.'); return; }
             const d = nearestCapturedDist(c[0], c[1]);
@@ -3324,24 +4642,43 @@
             if (!x.cb.checked) continue;
             const v = normHn(x.inp.value);
             if (!v) { x.inp.classList.add('wfit-bad-in'); bad = true; continue; }
-            sel.push({ lon: x.p.lon, lat: x.p.lat, d: x.p.d, label: v, far: x.p.wazeFar || 0, ovl: x.p.ovl || 0 });
+            sel.push({ lon: x.p.lon, lat: x.p.lat, d: x.p.d, label: v, far: x.p.wazeFar || 0, ovl: x.p.ovl || 0,
+                segId: x.p.segId != null ? x.p.segId : null, altro: x.p.altro || null, rpp: !!x.p.rpp });
         }
         // due o piu' civici dello stesso gruppo: nascono sovrapposti e andranno separati a mano
         const perGruppo = {};
         for (const x of sel) if (x.ovl) bump(perGruppo, x.ovl);
         for (const x of sel) x.stack = !!(x.ovl && perGruppo[x.ovl] > 1);
-        if (bad) { toast('Controlla i numeri evidenziati in rosso (formati validi: 18, 18/B, 12/BIS).', 7000); return null; }
+        if (bad) { toast('Controlla i numeri evidenziati in rosso: Waze accetta un numero seguito da al massimo 2 lettere (18, 18b, 7ab).', 7000); return null; }
         if (!sel.length) return null;
-        // hai spuntato a mano dei numeri che su questa via esistono gia', solo altrove: prima di
-        // creare un doppione te lo diciamo chiaramente e decidi tu
-        const moved = sel.filter(x => x.far);
-        if (moved.length && !confirm(
-            `${moved.length} ${pl(moved.length, 'numero che hai spuntato esiste', 'numeri che hai spuntato esistono')} gi\u00e0 su questa strada, `
-            + `ma in un altro punto (${moved.slice(0, 6).map(x => x.label + ' a ~' + x.far + ' m').join(', ')}${moved.length > 6 ? '\u2026' : ''}).\n\n`
-            + 'Di solito la cosa giusta \u00e8 trascinare il civico gi\u00e0 sulla mappa nella posizione corretta: '
-            + 'aggiungerne un altro crea un doppione e Waze ne accetta uno solo per via.\n\n'
+        // regole della guida Numeri civici: indirizzo gia' fatto come RPP, o accesso su un'altra via
+        const rpp = sel.filter(x => x.rpp);
+        if (rpp.length && !confirm(
+            `${rpp.length} ${pl(rpp.length, 'numero che hai spuntato esiste', 'numeri che hai spuntato esistono')} gi\u00e0 su questa via come luogo residenziale (RPP): `
+            + `${rpp.slice(0, 6).map(x => x.label).join(', ')}${rpp.length > 6 ? '\u2026' : ''}.\n\n`
+            + 'La guida Numeri civici chiede di NON inserire anche il civico normale per un indirizzo gi\u00e0 fatto come RPP.\n\n'
             + 'Vuoi inserirli lo stesso?'
         )) return null;
+        if (!lastHNScan.ok) toast('Attenzione: non sono riuscito a leggere i civici gi\u00e0 su Waze, quindi il controllo dei doppioni non \u00e8 stato fatto. Controlla la mappa prima di salvare.', 12000);
+        const altro = sel.filter(x => x.altro);
+        if (altro.length && !confirm(
+            `${altro.length} ${pl(altro.length, 'civico che hai spuntato ha', 'civici che hai spuntato hanno')} l'accesso pi\u00f9 vicino a un'altra via `
+            + `(${altro.slice(0, 4).map(x => x.label + ' \u2192 ' + x.altro.nome).join(', ')}${altro.length > 4 ? '\u2026' : ''}).\n\n`
+            + 'Se l\'ingresso \u00e8 davvero su quella via, la guida chiede un luogo residenziale (RPP), non un civico. '
+            + 'Se invece hai verificato che l\'ingresso \u00e8 sulla sua strada, puoi procedere.\n\nVuoi inserirli come civici?'
+        )) return null;
+        // Numeri che su questa via esistono gia' (qui vicino o altrove): non si inseriscono,
+        // punto. Si tolgono dalla selezione e si spiega il perche'.
+        const gia = sel.filter(x => x.far || x.rpp);
+        if (gia.length) {
+            const restano = sel.filter(x => !x.far && !x.rpp);
+            toast(`${gia.length} ${pl(gia.length, 'numero non verr\u00e0 inserito perch\u00e9 esiste', 'numeri non verranno inseriti perch\u00e9 esistono')} gi\u00e0 su questa via `
+                + `(${gia.slice(0, 6).map(x => x.label).join(', ')}${gia.length > 6 ? '\u2026' : ''}): `
+                + 'Waze accetta un solo punto per numero. Se quello sulla mappa \u00e8 messo male, TRASCINALO sul punto giusto.', 12000);
+            sel.length = 0;
+            for (const x of restano) sel.push(x);
+            if (!sel.length) return null;
+        }
         // Waze tiene un solo punto per numero sulla stessa via: se ne hai spuntati due uguali
         // te lo diciamo, ma la scelta resta tua (il secondo verra' rifiutato al salvataggio)
         const cnt = {};
@@ -3361,27 +4698,28 @@
         const bNo = document.createElement('button');
         bNo.className = 'wfit-btn'; bNo.textContent = 'Annulla';
         foot.appendChild(ctx.bGo); foot.appendChild(bNo);
-        bNo.addEventListener('click', () => ctx.box.remove());
+        bNo.addEventListener('click', () => { ctx.box.remove(); syncDotTracking(); });
         ctx.bGo.addEventListener('click', () => {
             const sel = collectHnSelection(ctx);
             if (!sel) return;
             ctx.box.remove();
+            syncDotTracking();
             runHnInsert(r, sel);
         });
         ctx.head.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
             const v = a.dataset.a === 'all';
-            // "tutti" non tira dentro i numero/numero finche' la modalita' e' "non inserito":
-            // il loro stato lo decidi con la barra sopra, non di rimbalzo
+            // "tutti" non tira dentro i numeri che Waze non accetta, ne' gli indirizzi da fare come RPP
             let skipped = 0, kept = 0, over = 0;
             ctx.rows.forEach(x => {
-                if (v && x.p.susp && settings.suspMode !== 'includi') { skipped++; return; }
+                if (v && x.p.susp) { skipped++; return; }
+                if (v && (x.p.rpp || x.p.altro || x.p.seq)) { kept++; return; }
                 // nemmeno i numeri gia' presenti sulla via ma messi male: quelli si spostano a mano
                 if (v && x.p.wazeFar) { kept++; return; }
                 // nemmeno i civici sovrapposti: li' dentro la scelta e' una sola e la fai tu
                 if (v && x.p.ovl) { over++; return; }
                 x.cb.checked = v;
             });
-            if (skipped) toast(`${skipped} ${pl(skipped, 'numero', 'numeri')} in forma 20/1 non ${pl(skipped, 'incluso', 'inclusi')}: usa "includi" nella barra, oppure ${pl(skipped, 'spuntalo', 'spuntali')} a mano.`, 8000);
+            if (skipped) toast(`${skipped} ${pl(skipped, 'numero \u00e8', 'numeri sono')} in un formato che Waze non accetta: ${pl(skipped, 'resta', 'restano')} senza spunta (vanno ${pl(skipped, 'inserito', 'inseriti')} a mano).`, 8000);
             if (kept) toast(`${kept} ${pl(kept, 'numero esiste', 'numeri esistono')} gi\u00e0 su questa strada in un altro punto: ${pl(kept, 'va spostato', 'vanno spostati')} a mano, quindi ${pl(kept, 'resta', 'restano')} senza spunta.`, 9000);
             if (over) toast(`${over} ${pl(over, 'civico sta', 'civici stanno')} sulla stessa coordinata di ${pl(over, 'un altro', 'altri')}: ${pl(over, 'va scelto', 'vanno scelti')} a mano, uno per uno, quindi ${pl(over, 'resta', 'restano')} senza spunta.`, 9000);
             ctx.updateGo();
@@ -3389,12 +4727,11 @@
         return foot;
     }
 
-    // Scelta in blocco sui numeri in forma numero/numero: si includono o si escludono tutti
-    // insieme, senza sbloccarli uno per uno. La scelta resta salvata.
+    // Numeri in un formato che Waze non accetta (20/1, 12/BIS): si possono mostrare o nascondere
+    // tutti insieme. Inserirli no: Waze accetta solo numero + al massimo 2 lettere minuscole.
     const SUSP_MODES = [
-        ['nonins', 'non inserito', 'Predefinito: restano visibili in lista ma senza spunta, quindi non vengono inseriti. Se ne vuoi uno, spuntalo a mano.'],
-        ['includi', 'includi', 'Li tratta come civici normali, gi\u00e0 spuntati. Usalo se nella tua zona questa forma \u00e8 reale.'],
-        ['escludi', 'escludi', 'Li toglie dalla lista: non li vedi e non li inserisci.']
+        ['nonins', 'mostra', 'Predefinito: restano visibili in lista, senza spunta. Se il numero giusto \u00e8 un altro, correggilo nella casella e spuntalo.'],
+        ['escludi', 'nascondi', 'Li toglie dalla lista.']
     ];
 
     function buildHnSuspBar(shown, ctx) {
@@ -3403,7 +4740,7 @@
         const bar = document.createElement('div');
         bar.className = 'wfit-muted wfit-hnsuspbar';
         const label = document.createElement('span');
-        label.innerHTML = `<b>${nSusp}</b> in forma 20/1:`;
+        label.innerHTML = `<b>${nSusp}</b> in un formato che Waze non accetta (20/1, 12/BIS):`;
         bar.appendChild(label);
 
         const applySuspMode = () => {
@@ -3411,9 +4748,7 @@
             for (const x of ctx.rows) {
                 if (!x.p.susp) continue;
                 x.row.style.display = (m === 'escludi') ? 'none' : '';
-                x.row.classList.toggle('wfit-hnsusp', m !== 'includi');
-                x.row.classList.toggle('wfit-hnok', m === 'includi');
-                x.cb.checked = (m === 'includi');
+                x.cb.checked = false;
                 x.setNote(...suspNote());
             }
             ctx.updateGo();
@@ -3433,28 +4768,59 @@
         }
         btns.forEach(b => b.el.classList.toggle('wfit-on', b.mode === settings.suspMode));
         ctx.legend.parentNode.insertBefore(bar, ctx.legend.nextSibling);
-        if (settings.suspMode !== 'includi') ctx.addLegend('<span class="wfit-swatch wfit-sw-susp"></span> forma 20/1, non inserito');
+        ctx.addLegend('<span class="wfit-swatch wfit-sw-susp"></span> formato non accettato da Waze');
     }
+
+    const zoomOra = () => { try { return sdk.Map.getZoomLevel(); } catch { return null; } };
 
     // Annota i civici gia' presenti su Waze e toglie loro la spunta
     function annotateExistingHNs(ctx) {
         return loadExistingHNs().then(ex => {
+            try { annotateAccessStreet(ctx, hnSegmentContext(ctx.rName ? toWazeCase(ctx.rName) : '')); } catch (e) { log('controllo accessi KO', e); }
+            const rppKeys = new Set(ex.filter(h => h.rpp).map(h => hnKey(h.num)));
             // si dice sempre su cosa e' stato fatto il confronto: se la via e' lunga e ne hai
             // caricato solo un pezzo, un doppione fuori vista lo script non puo' vederlo
             if (ctx.scan) {
-                ctx.scan.textContent = lastHNScan.hn
-                    ? `Confrontati con ${lastHNScan.hn} ${pl(lastHNScan.hn, 'civico gi\u00e0 su Waze', 'civici gi\u00e0 su Waze')} su ${lastHNScan.segs} ${pl(lastHNScan.segs, 'segmento', 'segmenti')} di questa via caricati nell'editor.`
-                    : `Nessun civico gi\u00e0 su Waze sui ${lastHNScan.segs} ${pl(lastHNScan.segs, 'segmento', 'segmenti')} di questa via caricati nell'editor.`;
-                ctx.scan.title = 'Il controllo dei doppioni guarda TUTTI i segmenti della stessa via caricati nell\'editor, non solo quelli che hai in lista: '
+                const rppTxt = lastHNScan.rpp ? `${lastHNScan.rpp} ${pl(lastHNScan.rpp, 'luogo residenziale', 'luoghi residenziali')} (RPP) sulla via \u00b7 ` : '';
+                const segTxt = `${lastHNScan.segs} ${pl(lastHNScan.segs, 'segmento', 'segmenti')} di questa via caricati nell'editor`
+                    + (lastHNScan.scaricati ? ` (${lastHNScan.scaricati} in lista ma non pi\u00f9 ${pl(lastHNScan.scaricati, 'caricato', 'caricati')})` : '');
+                ctx.scan.classList.toggle('wfit-scanbad', !lastHNScan.ok);
+                ctx.scan.textContent = !lastHNScan.ok
+                    ? '\u26a0\ufe0f Su questa via ci sono gi\u00e0 dei civici, ma il tuo editor non me li fa leggere: non posso dirti quali numeri esistono di gi\u00e0. '
+                        + (zoomOra() != null && zoomOra() < 18
+                            ? `Sei allo zoom ${zoomOra()}: avvicinati sul tratto che stai lavorando (l'editor carica i civici di solito dal 16-18 in su) e riapri l'elenco. `
+                            : 'Prova a ricaricare l\'editor e a riaprire l\'elenco. ')
+                        + 'Se vai avanti cos\u00ec, guarda tu sulla mappa quali civici ci sono gi\u00e0: i doppioni verrebbero rifiutati al salvataggio.'
+                    : rppTxt + (lastHNScan.hn
+                        ? `Confrontati con ${lastHNScan.hn} ${pl(lastHNScan.hn, 'civico gi\u00e0 su Waze', 'civici gi\u00e0 su Waze')} su ${segTxt}.`
+                        : `Nessun civico gi\u00e0 su Waze sui ${segTxt}.`);
+                ctx.scan.title = (lastHNScan.ok ? '' : 'Il WME carica i numeri civici solo dallo zoom 18 in su e solo per la zona a schermo: '
+                        + 'piu' + '\u00f9 lontano lo script non pu\u00f2 sapere quali esistono gi\u00e0.\n\n')
+                    + 'Il controllo dei doppioni guarda TUTTI i segmenti della stessa via caricati nell\'editor, non solo quelli che hai in lista: '
                     + 'cosi\' trova il civico anche se sta cento metri piu\' avanti. Quello che l\'editor non ha ancora caricato per\u00f2 non si vede: '
                     + 'se la via \u00e8 lunga, prima di aprire l\'elenco allarga la vista sulla strada intera.';
                 ctx.scan.style.display = '';
             }
-            if (!ex.length) return;
-            let marked = 0, moved = 0;
+            if (!ex.length) {
+                try { annotateNumbering(ctx); } catch (e) { log('controllo lato/sequenza KO', e); }
+                ctx.updateGo();
+                return;
+            }
+            let marked = 0, moved = 0, rpp = 0;
             for (const x of ctx.rows) {
                 if (x.p.manual) continue;
                 const label = normHn(x.inp.value) || x.p.label;
+                if (rppKeys.has(hnKey(label))) {
+                    x.cb.checked = false;
+                    x.p.rpp = true;
+                    x.row.classList.add('wfit-hnwaze');
+                    x.setNote('waze', 'gi\u00e0 su Waze come luogo residenziale (RPP): non va aggiunto anche come civico');
+
+                    x.row.title = 'Su questa via esiste gi\u00e0 un luogo residenziale (RPP) con questo numero. Per la guida Numeri civici '
+                        + 'un indirizzo fatto come RPP non va inserito anche come civico normale.';
+                    rpp++;
+                    continue;
+                }
                 const near = findExistingHN(ex, label, x.p.lon, x.p.lat);
                 if (near) {
                     x.cb.checked = false;
@@ -3484,19 +4850,20 @@
                     + `\nCoordinate del civico su Waze: ${far.hn.c[1].toFixed(6)}, ${far.hn.c[0].toFixed(6)}`;
                 moved++;
             }
-            if (marked) ctx.addLegend('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
+            if (marked || rpp) ctx.addLegend('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
             if (moved) {
                 ctx.addLegend('<span class="wfit-swatch wfit-sw-moved"></span> gi\u00e0 su Waze, posizionato male');
                 log(`civici gia' presenti sulla via ma lontani dal punto ANNCSU: ${moved} (non inseriti)`);
             }
-            if (marked || moved) ctx.updateGo();
+            try { annotateNumbering(ctx); } catch (e) { log('controllo lato/sequenza KO', e); }
+            ctx.updateGo();
         }).catch(() => { /* niente annotazioni */ });
     }
 
     // Passo di controllo: l'utente vede, verifica e SCEGLIE i civici prima dell'inserimento
     function toggleHnReview(card, r) {
         const oldBox = card.querySelector('.wfit-hnrev');
-        if (oldBox) { oldBox.remove(); return; }
+        if (oldBox) { oldBox.remove(); syncDotTracking(); return; }
         const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
         if (!HN || typeof HN.addHouseNumber !== 'function') {
             toast('Questa versione del WME non espone ancora addHouseNumber nell\'SDK: aggiorna l\'editor e riprova.', 8000);
@@ -3522,6 +4889,9 @@
         const nOverlap = markOverlaps(shown);
 
         const ctx = createHnReviewBox(shown, cand);
+        ctx.rName = r.name;
+        ctx.r = r;
+        if (!rppSupportato()) ctx.box.classList.add('wfit-norpp');
         for (const p of shown) ctx.addRow(p);
         ctx.box.appendChild(buildHnAddBox(ctx));
         ctx.box.appendChild(buildHnFooter(ctx, r));
@@ -3538,6 +4908,7 @@
         }
         if (shown.some(p => p.dup)) ctx.addLegend('<span class="wfit-swatch wfit-sw-dup"></span> stesso numero, pi\u00f9 punti');
         card.appendChild(ctx.box);
+        syncDotTracking();
         annotateExistingHNs(ctx);
     }
 
@@ -3545,57 +4916,63 @@
     const isProjectedError = m => /projected|not allowed to add a house number/i.test(m);
     const errText = e => String((e && e.message) || 'errore');
 
-    // Firma documentata: { houseNumber, point }; ripiego { number, point }.
-    // La prima che funziona vale per tutto il lotto: si sceglie una volta sola.
+    // addHouseNumber({ number, point, segmentId }): con segmentId il civico si aggancia al
+    // segmento della sua via; senza, l'SDK userebbe il segmento piu' vicino, che su un
+    // civico d'angolo puo' essere la traversa.
     function makeHouseNumberAdder(HN) {
-        const shapes = [
-            (num, pt) => HN.addHouseNumber({ houseNumber: num, point: { type: 'Point', coordinates: pt } }),
-            (num, pt) => HN.addHouseNumber({ number: num, point: { type: 'Point', coordinates: pt } })
-        ];
-        let shape = -1;
-        const add = (num, pt) => {
-            if (shape >= 0) { shapes[shape](num, pt); return; }
-            for (let i = 0; i < shapes.length; i++) {
-                try { shapes[i](num, pt); shape = i; return; }
-                catch (e) {
-                    if (i < shapes.length - 1 && /invalid argument/i.test(errText(e))) continue;
-                    throw e;
-                }
+        return (num, pt, segId) => {
+            const args = { number: num, point: { type: 'Point', coordinates: pt } };
+            // segmentId solo se quel segmento e' davvero nel modello adesso
+            if (segId != null && segmentoCaricato(segId)) args.segmentId = Number(segId);
+            try { HN.addHouseNumber(args); }
+            catch (e) {
+                // l'id era gia' sparito fra il controllo e la chiamata: si lascia scegliere
+                // il segmento al WME, che prende il piu' vicino
+                if (args.segmentId == null || !/not found in data model/i.test(errText(e))) throw e;
+                log('civico', num, ': segmento', args.segmentId, 'non piu\' caricato, aggancio automatico');
+                HN.addHouseNumber({ number: num, point: { type: 'Point', coordinates: pt } });
             }
         };
-        add.usedShape = () => shape;
-        return add;
     }
 
     // Inserisce l'elenco confermato, tenendo da parte i rifiuti da "segmento proiettato"
+    function ricordaInserito(p, streets) {
+        civiciInseriti.push({ segId: p.segId != null ? p.segId : null, num: String(p.label), c: [p.lon, p.lat], streets: streets || null });
+        if (civiciInseriti.length > 3000) civiciInseriti.splice(0, civiciInseriti.length - 3000);
+    }
+
     async function insertHouseNumbers(list, addOne, existing, tally, rec) {
+        // le vie dei segmenti in lista: servono a ricordare i civici inseriti anche quando
+        // il segmento non e' piu' caricato
+        const vieLista = viaStreetIds(sameStreetSegmentIds());
+        // Ultimo filtro prima di scrivere sulla mappa: un numero che su questa via esiste gia'
+        // NON viene inserito, in nessun caso. Waze accetta un solo punto per numero, e un
+        // doppione verrebbe rifiutato al salvataggio o creerebbe confusione.
+        const giaSullaVia = new Set(existing.filter(h => h.own).map(h => hnKey(h.num)));
         const one = p => {
             if (findExistingHN(existing, p.label, p.lon, p.lat)) { tally.dup++; rec(p, 'gia_presente', 'civico gia\' su Waze'); return; }
-            // rete di sicurezza: se l'elenco non ha fatto in tempo ad annotarlo (o l'annotazione
-            // e' fallita), qui il doppione lontano viene comunque fermato. Passa solo quello
-            // che l'utente ha confermato consapevolmente nella finestra di avviso.
-            if (!p.far) {
-                const far = findMisplacedHN(existing, p.label, p.lon, p.lat);
-                if (far) {
-                    tally.moved++;
-                    rec(p, 'non_inserito', `civico gia' su questa strada a ~${Math.round(far.d)} m: va spostato, non aggiunto`);
-                    return;
-                }
+            const far = findMisplacedHN(existing, p.label, p.lon, p.lat);
+            if (far) {
+                tally.moved++;
+                rec(p, 'non_inserito', `civico gia' su questa strada a ~${Math.round(far.d)} m: va spostato, non aggiunto`);
+                return;
             }
-            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; if (p.stack) tally.stacked++; rec(p, 'inserito', ''); return; }
+            // stesso numero sulla via letto da una sorgente senza coordinate utili (o come RPP)
+            if (giaSullaVia.has(hnKey(p.label))) {
+                tally.dup++;
+                rec(p, 'gia_presente', 'numero gi\u00e0 presente su questa via');
+                return;
+            }
+            try {
+                addOne(p.label, [p.lon, p.lat], p.segId);
+                ricordaInserito(p, vieLista);
+                tally.ok++;
+                if (p.stack) tally.stacked++;
+                rec(p, 'inserito', '');
+            }
             catch (e) {
                 const m = errText(e);
                 if (isProjectedError(m)) { tally.projFails.push(p); return; }
-                // alcune installazioni rifiutano la barra: si ritenta con "18B" al posto di "18/B"
-                if (p.label.includes('/') && /invalid|format|number/i.test(m)) {
-                    try { addOne(p.label.replace('/', ''), [p.lon, p.lat]); tally.ok++; rec(p, 'inserito', 'numero scritto senza barra'); return; }
-                    catch (e2) {
-                        const m2 = errText(e2);
-                        if (isProjectedError(m2)) tally.projFails.push(p);
-                        else { bump(tally.reasons, niceReason(m2)); rec(p, 'errore', niceReason(m2)); }
-                        return;
-                    }
-                }
                 bump(tally.reasons, niceReason(m));
                 rec(p, 'errore', niceReason(m));
             }
@@ -3622,7 +4999,7 @@
         ];
         await panTo(mid);
         for (const p of retry) {
-            try { addOne(p.label, [p.lon, p.lat]); tally.ok++; rec(p, 'inserito', 'riuscito al secondo tentativo'); }
+            try { addOne(p.label, [p.lon, p.lat], p.segId); ricordaInserito(p, viaStreetIds(sameStreetSegmentIds())); tally.ok++; rec(p, 'inserito', 'riuscito al secondo tentativo'); }
             catch (e) {
                 const m = errText(e);
                 if (isProjectedError(m)) tally.projFails.push(p);
@@ -3645,17 +5022,8 @@
 
     // Segmento caricato piu' vicino a un punto (pre-filtro a riquadro, poi distanza vera)
     function nearestLoadedSegment(segs, lon, lat) {
-        if (!segs) return null;
-        const cosLat = Math.cos(lat * Math.PI / 180);
-        let bestD = Infinity, bestId = null;
-        for (const s of segs) {
-            let inBox = false;
-            for (const q of s.c) { if (Math.abs(q[0] - lon) < 0.003 && Math.abs(q[1] - lat) < 0.002) { inBox = true; break; } }
-            if (!inBox) continue;
-            const d = distPointToPolyline(lon, lat, s.c, cosLat);
-            if (d < bestD) { bestD = d; bestId = s.id; }
-        }
-        return bestId;
+        const b = nearestSeg(segs, lon, lat);
+        return b ? b.id : null;
     }
 
     function segmentIsNamed(id) {
@@ -3708,6 +5076,8 @@
         const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
         if (!HN || typeof HN.addHouseNumber !== 'function') return;
         if (!list || !list.length) return;
+        const blocco = editingBlock();
+        if (blocco) { toast(`Niente inserimento: ${blocco}.`, 9000); return; }
         const uns = unsavedCount();
         if (uns != null && uns > 0) {
             toast(`Hai ${uns} ${pl(uns, 'modifica non salvata', 'modifiche non salvate')}: il WME non permette di aggiungere civici su segmenti modificati. Salva (Ctrl+S), poi riapri l'elenco e riconferma.`, 10000);
@@ -3720,6 +5090,11 @@
             // civici gia' presenti su Waze (caricati per davvero, quando possibile)
             const existing = await loadExistingHNs();
             const addOne = makeHouseNumberAdder(HN);
+            // civici senza segmento assegnato (righe aggiunte a mano, elenco non ancora annotato)
+            const segCtx = hnSegmentContext(r && r.name ? toWazeCase(r.name) : '');
+            for (const p of list) {
+                if (p.segId == null) { const o = nearestSeg(segCtx.own, p.lon, p.lat); p.segId = o ? o.id : null; }
+            }
             const tally = { ok: 0, dup: 0, moved: 0, stacked: 0, reasons: {}, projFails: [] };
             resetSegsPerLog();
             const rec = (p, esito, motivo) => {
@@ -3751,7 +5126,6 @@
             const { msg, failed } = hnInsertSummary(tally, toWazeCase(r.name));
             toast(msg, failed ? 15000 : 8000);
             aggiornaPendingUI();
-            if (tally.ok) log(`house number inseriti con firma #${addOne.usedShape()}`);
             flushLogs();
         } finally {
             endBusy();
@@ -3765,8 +5139,7 @@
             const seg = sdk.DataModel.Segments.getById({ segmentId: id });
             if (seg) {
                 if (seg.primaryStreetId != null) pn = seg.primaryStreetId;
-                const a = seg.alternateStreetIds || seg.streetIds;
-                if (Array.isArray(a)) alts = a.slice();
+                if (Array.isArray(seg.alternateStreetIds)) alts = seg.alternateStreetIds.slice();
             }
         } catch { /* sotto */ }
         try {
@@ -3778,49 +5151,24 @@
                 }
             }
         } catch { /* ignoto */ }
-        try {
-            if (pn == null || alts == null) {
-                const s = WME().model.segments.getObjectById(id);
-                const a = s && (s.attributes || s);
-                if (a) {
-                    if (pn == null && a.primaryStreetID != null) pn = a.primaryStreetID;
-                    if (alts == null && Array.isArray(a.streetIDs)) alts = a.streetIDs.slice();
-                }
-            }
-        } catch { /* pazienza */ }
         return { pn, alts };
     }
 
     // Etichetta leggibile "Nome, Comune" di una via (per il dialogo di conferma)
     function cityNameById(cid) {
-        try {
-            const C = sdk.DataModel.Cities;
-            if (C && typeof C.getById === 'function') { const c = C.getById({ cityId: cid }); if (c && c.name) return c.name; }
-        } catch { /* sotto */ }
-        try {
-            const c = WME().model.cities.getObjectById(cid);
-            if (c) return (c.attributes && c.attributes.name) || '';
-        } catch { /* niente */ }
-        return '';
+        try { const c = sdk.DataModel.Cities.getById({ cityId: cid }); return (c && c.name) || ''; }
+        catch { return ''; }
+    }
+    // Solo il nome della via (senza citta'): serve a riconoscere le sigle negli alternativi
+    function streetNameById(id) {
+        try { const s = sdk.DataModel.Streets.getById({ streetId: id }); return (s && s.name) || ''; }
+        catch { return ''; }
     }
     function streetLabel(id) {
         try {
-            const S = sdk.DataModel.Streets;
-            if (S && typeof S.getById === 'function') {
-                const s = S.getById({ streetId: id });
-                if (s) { const c = cityNameById(s.cityId); return (s.name || '(senza nome)') + (c ? ', ' + c : ''); }
-            }
+            const s = sdk.DataModel.Streets.getById({ streetId: id });
+            if (s) { const c = cityNameById(s.cityId); return (s.name || '(senza nome)') + (c ? ', ' + c : ''); }
         } catch { /* sotto */ }
-        try {
-            const W = WME();
-            const s = W.model.streets.getObjectById(id);
-            if (s) {
-                const a = s.attributes || s;
-                let cn = '';
-                try { const c = W.model.cities.getObjectById(a.cityID); cn = (c && c.attributes && c.attributes.name) || ''; } catch { /* vuoto */ }
-                return (a.name || '(senza nome)') + (cn ? ', ' + cn : '');
-            }
-        } catch { /* niente */ }
         return '#' + id;
     }
 
@@ -3836,41 +5184,47 @@
 
     // Livello dell'utente (0-based: L1 = 0)
     function userRank() {
-        return firstOk(
-            () => (sdk.State && typeof sdk.State.getUserInfo === 'function') ? pick(sdk.State.getUserInfo(), 'rank') : null,
-            () => {
-                const W = WME();
-                const u = W.loginManager && W.loginManager.user;
-                if (!u) return null;
-                const r = pick(u, 'rank') != null ? pick(u, 'rank') : pick(u.attributes, 'rank');
-                if (r != null) return r;
-                return typeof u.getRank === 'function' ? u.getRank() : null;
-            }
-        );
+        try { return pick(sdk.State.getUserInfo(), 'rank'); } catch { return null; }
     }
 
     // Lock effettivo del segmento (manuale se presente, altrimenti automatico)
     function segEffLock(id) {
-        return firstOk(
-            () => pick(sdk.DataModel.Segments.getById({ segmentId: id }), 'lockRank', 'rank'),
-            () => {
-                const s = WME().model.segments.getObjectById(id);
-                return pick(s && (s.attributes || s), 'lockRank', 'rank');
-            }
-        );
+        try { return pick(sdk.DataModel.Segments.getById({ segmentId: id }), 'lockRank', 'rank'); }
+        catch { return null; }
     }
 
-    // Le due vie da usare secondo la modalita' scelta: fuori dal centro abitato il nome primario
-    // va sulla citta' vuota ("Nessuno") e quello alternativo sulla citta' vera.
+    // Strade con sigla (Wazeopedia Italia, "Denominazione delle strade"): A1, SS12, SR31,
+    // SP20bis, SS591var, SS20dir, NSA122. Il PN porta SOLO la sigla; il nome esteso
+    // ("SP231 Andria-Canosa") va nell'AN, con la citta'.
+    const SIGLA_RE = /^((?:A|SS|SR|SP|NSA)\d+(?:bis|ter|quater|dir|var|racc|radd)*)(?:\s+(.+))?$/;
+    // negli alternativi si proteggono anche le sigle che il TTS sa leggere (SC, SGC)
+    const isSiglaName = n => SIGLA_RE.test(String(n || '')) || /^(?:SC\d+|SGC\b)/.test(String(n || ''));
+    function applyNames(streetName) {
+        const m = SIGLA_RE.exec(streetName);
+        if (!m) return { pn: streetName, an: streetName, sigla: false, full: false };
+        return { pn: m[1], an: streetName, sigla: true, full: !!m[2] };
+    }
+
+    // Le vie da usare secondo la modalita' scelta:
+    // - dentro il centro abitato: PN = via + citta' (per le sigle con nome esteso, AN = nome esteso + citta');
+    // - fuori dal centro abitato: PN = via senza citta' ("Nessuno"), AN = via + citta'.
     function resolveApplyStreets(streetName, cityName, extra) {
         const city = resolveCity(cityName);
-        if (!city) throw new Error(`comune "${cityName}" non risolvibile via SDK (impostalo una volta a mano su un segmento vicino)`);
-        if (!extra) return { pnStreet: getOrAddStreet(streetName, city.id), anStreet: null };
-        const emptyCity = resolveEmptyCity();
-        if (!emptyCity) throw new Error('citt\u00e0 vuota ("Nessuno") non trovata nel modello: apri/aggiungi in zona un segmento senza citt\u00e0 e riprova');
+        if (!city) throw new Error(`citt\u00e0 "${cityName}" non risolvibile via SDK (impostala una volta a mano su un segmento vicino)`);
+        const nm = applyNames(streetName);
+        if (!extra) {
+            return {
+                pnStreet: getOrAddStreet(nm.pn, city.id),
+                anStreet: nm.sigla && nm.full ? getOrAddStreet(nm.an, city.id) : null,
+                nm
+            };
+        }
+        const emptyCity = resolveEmptyCity(city);
+        if (!emptyCity) throw new Error('citt\u00e0 vuota ("Nessuno") della regione giusta non trovata nel modello: apri o aggiungi in zona un segmento senza citt\u00e0 e riprova');
         return {
-            pnStreet: getOrAddStreet(streetName, emptyCity.id),
-            anStreet: getOrAddStreet(streetName, city.id)
+            pnStreet: getOrAddStreet(nm.pn, emptyCity.id),
+            anStreet: getOrAddStreet(nm.an, city.id),
+            nm
         };
     }
 
@@ -3892,6 +5246,8 @@
         return window.confirm(
             `${SCRIPT_NAME}: su ${staleSegs} ${pl(staleSegs, 'segmento', 'segmenti')} ci sono ${staleTot} ${pl(staleTot, 'nome alternativo', 'nomi alternativi')} ${pl(staleTot, 'NON previsto', 'NON previsti')} dalle scelte dello script:\n` +
             `\u2022 ${esempi}${staleLabels.size > 6 ? '\u2026' : ''}\n\n` +
+            `Attenzione: per la guida gli alternativi possono contenere anche nomi locali non ufficiali e, nelle regioni bilingui, ` +
+            `il nome nella seconda lingua. Le sigle (SS, SP, SR...) non sono in questo elenco: restano sempre.\n\n` +
             `OK = rimuovili e riallinea tutto (PN/AN come impostato)\n` +
             `Annulla = mantienili (lo script aggiunge senza togliere)`);
     }
@@ -3903,12 +5259,27 @@
     // se la prima strategia non lascia il segmento come voluto si prova l'altra; se anche quella
     // fallisce il segmento finisce fra i falliti (niente successi fantasma).
     // Restituisce 'ok', 'notloaded', oppure il motivo del fallimento.
+    // Fuori dal centro abitato la guida vuole su tutte le strade l'attributo "obbligo
+    // accensione dei fari". Si imposta e si verifica; se non riesce il segmento non fallisce,
+    // lo si conta a parte nel riepilogo.
+    function setHeadlights(id) {
+        try {
+            sdk.DataModel.Segments.updateSegment({ segmentId: id, flagAttributes: { headlights: true } });
+            const s = sdk.DataModel.Segments.getById({ segmentId: id });
+            return !!(s && s.flagAttributes && s.flagAttributes.headlights);
+        } catch { return false; }
+    }
+
     function makeSegmentApplier(plan) {
-        const { pnStreet, anStreet, targetAlts, staleOf, cleanMode, tally } = plan;
+        const { pnStreet, anStreet, targetAlts, staleOf, cleanMode, fari, tally } = plan;
         return async id => {
             let seg = null;
             try { seg = sdk.DataModel.Segments.getById({ segmentId: id }); } catch { /* sotto */ }
             if (!seg) return 'notloaded';
+            // regole della guida: le rampe restano senza citta' con i nomi di direzione, e i
+            // segmenti non carrabili (sentieri, ferrovie...) non si editano
+            if (seg.roadType === RT_RAMP) return 'rampa: per la guida resta senza citt\u00e0 e con i nomi di direzione, non si nomina con ANNCSU';
+            if (seg.isDrivable === false) return 'segmento non carrabile (sentiero, ferrovia...): per la guida non va editato';
 
             const st = segAddressState(id);
             const known = Array.isArray(st.alts);
@@ -3917,36 +5288,45 @@
             const anPresent = anStreet && known && st.alts.some(a => sameId(a, anStreet.id));
             const needAn = !!anStreet && !anPresent;
             const needClean = cleanMode && stale.length > 0;
-            if (!needPn && !needAn && !needClean) { tally.skipped++; return 'ok'; }
+            const needFari = !!fari && !!seg.flagAttributes && seg.flagAttributes.headlights !== true;
+            if (!needPn && !needAn && !needClean) {
+                if (needFari) {
+                    if (setHeadlights(id)) { tally.applied++; tally.fari++; } else { tally.skipped++; tally.fariKo++; }
+                    return 'ok';
+                }
+                tally.skipped++;
+                return 'ok';
+            }
 
             const wantAlts = known
                 ? (needClean ? [...new Set(targetAlts)] : [...new Set([...st.alts, ...targetAlts])])
                 : null;
 
-            let anViaLegacy = false;
+            const upd = addressData => sdk.DataModel.Segments.updateAddress({ segmentId: id, addressData });
             const strategies = [];
             if (wantAlts) {
+                strategies.push(() => upd({ primaryStreetId: pnStreet.id, alternateStreetIds: wantAlts }));
+                // firma delle versioni precedenti dell'SDK (campi al primo livello)
+                strategies.push(() => sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id, alternateStreetIds: wantAlts }));
+            } else {
                 strategies.push(() => {
-                    sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id, alternateStreetIds: wantAlts });
+                    upd({ primaryStreetId: pnStreet.id });
+                    if (needAn) sdk.DataModel.Segments.addAlternateStreet({ segmentIds: [id], streetId: anStreet.id });
                 });
             }
-            strategies.push(() => {
-                sdk.DataModel.Segments.updateAddress({ segmentId: id, primaryStreetId: pnStreet.id });
-                if (needAn) anViaLegacy = legacyAddAlternate(id, anStreet.id);
-            });
 
             let lastErr = null, lastNow = null;
             for (const run of strategies) {
-                anViaLegacy = false;
                 try { run(); } catch (e) { lastErr = e; continue; }
                 await tick(); // un respiro: il modello deve digerire la modifica prima della verifica
                 // verifica: com'e' DAVVERO il segmento adesso? (confronto tollerante sugli ID)
                 const now = segAddressState(id);
                 lastNow = now;
                 const pnOk = sameId(now.pn, pnStreet.id);
-                const anNow = !anStreet ? true
-                    : (Array.isArray(now.alts) ? now.alts.some(a => sameId(a, anStreet.id)) : anViaLegacy || anPresent);
-                if (pnOk && (anNow || !needAn)) {
+                const anNow = !anStreet ? true : (Array.isArray(now.alts) ? now.alts.some(a => sameId(a, anStreet.id)) : anPresent);
+                // se non si doveva ripulire, gli alternativi che c'erano devono esserci ancora
+                const keptOk = !known || needClean || !Array.isArray(now.alts) || st.alts.every(a => now.alts.some(b => sameId(a, b)));
+                if (pnOk && (anNow || !needAn) && keptOk) {
                     tally.applied++;
                     if (needAn) { if (anNow) tally.anOk++; else tally.anManual++; }
                     if (needClean) {
@@ -3954,9 +5334,10 @@
                         if (!still.length) tally.cleaned += stale.length;
                         else tally.cleanFailed += still.length;
                     }
+                    if (needFari) { if (setHeadlights(id)) tally.fari++; else tally.fariKo++; }
                     return 'ok';
                 }
-                lastErr = new Error('il WME non ha registrato la modifica come richiesto');
+                lastErr = new Error(keptOk ? 'il WME non ha registrato la modifica come richiesto' : 'il WME ha tolto degli alternativi che dovevano restare');
             }
             log('verifica fallita', id, '\u00b7 PN atteso', pnStreet.id, '\u00b7 letto', lastNow && lastNow.pn, '\u00b7 alternativi letti', lastNow && lastNow.alts);
             return applyFailReason(lastErr && lastErr.message ? String(lastErr.message) : 'modifica rifiutata dal WME');
@@ -3999,15 +5380,17 @@
         }
     }
 
-    function applySummary(tally, failReasons, extra, streetName, cityName) {
+    function applySummary(tally, failReasons, extra, nm, cityName, hasAn) {
         let msg = extra
-            ? `PN "${streetName}" (citt\u00e0: Nessuno): ${tally.applied} ${pl(tally.applied, 'modificato', 'modificati')}`
-            : `"${streetName}" (${cityName}): ${tally.applied} ${pl(tally.applied, 'modificato', 'modificati')}`;
+            ? `PN "${nm.pn}" (citt\u00e0: Nessuno): ${tally.applied} ${pl(tally.applied, 'modificato', 'modificati')}`
+            : `"${nm.pn}" (${cityName}): ${tally.applied} ${pl(tally.applied, 'modificato', 'modificati')}`;
         if (tally.skipped) msg += ` \u00b7 gi\u00e0 a posto (nessuna modifica): ${tally.skipped}`;
         if (tally.cleaned) msg += ` \u00b7 riallineati: ${tally.cleaned} ${pl(tally.cleaned, 'alternativo non conforme rimosso', 'alternativi non conformi rimossi')}`;
         if (tally.cleanFailed) msg += ` \u00b7 ${tally.cleanFailed} ${pl(tally.cleanFailed, 'alternativo non rimovibile', 'alternativi non rimovibili')} via SDK: toglili a mano`;
-        if (extra && tally.anOk) msg += ` \u00b7 AN "${streetName}, ${cityName}" ${pl(tally.anOk, 'aggiunto', 'aggiunti')}: ${tally.anOk}`;
-        if (extra && tally.anManual) msg += ` \u00b7 AN da aggiungere a mano: ${tally.anManual}`;
+        if (hasAn && tally.anOk) msg += ` \u00b7 AN "${nm.an}, ${cityName}" ${pl(tally.anOk, 'aggiunto', 'aggiunti')}: ${tally.anOk}`;
+        if (hasAn && tally.anManual) msg += ` \u00b7 AN da aggiungere a mano: ${tally.anManual}`;
+        if (tally.fari) msg += ` \u00b7 obbligo fari accesi impostato: ${tally.fari}`;
+        if (tally.fariKo) msg += ` \u00b7 obbligo fari da impostare a mano: ${tally.fariKo}`;
         if (failReasons.size) {
             const perMotivo = {};
             for (const m of failReasons.values()) bump(perMotivo, m);
@@ -4021,25 +5404,34 @@
         const ids = captured.size ? [...captured.keys()] : getSelectedSegmentIds();
         if (!ids.length) { toast('Nessun segmento in lista.'); return; }
         if (busy) { toast('Attendi la fine dell\'operazione in corso.'); return; }
+        const blocco = editingBlock();
+        if (blocco) { toast(`Niente modifiche: ${blocco}.`, 9000); return; }
         suppressUntil = Date.now() + 2500;
         const extra = settings.applyMode !== 'urb';
         beginBusy();
         try {
-            const { pnStreet, anStreet } = resolveApplyStreets(streetName, cityName, extra);
+            const { pnStreet, anStreet, nm } = resolveApplyStreets(streetName, cityName, extra);
             const targetAlts = anStreet ? [anStreet.id] : [];
-            // alternativi presenti che non rientrano nelle scelte dello script
+            // alternativi presenti che non rientrano nelle scelte dello script. Le sigle (SS11,
+            // SP13...) non si toccano mai: la guida le vuole negli alternativi.
+            const siglaCache = new Map();
+            const isSiglaAlt = a => {
+                const k = String(a);
+                if (!siglaCache.has(k)) siglaCache.set(k, isSiglaName(streetNameById(a)));
+                return siglaCache.get(k);
+            };
             const staleOf = st => Array.isArray(st.alts)
-                ? st.alts.filter(a => !sameId(a, pnStreet.id) && !targetAlts.some(t => sameId(t, a)))
+                ? st.alts.filter(a => !sameId(a, pnStreet.id) && !targetAlts.some(t => sameId(t, a)) && !isSiglaAlt(a))
                 : [];
 
-            const tally = { applied: 0, skipped: 0, anOk: 0, anManual: 0, cleaned: 0, cleanFailed: 0 };
+            const tally = { applied: 0, skipped: 0, anOk: 0, anManual: 0, cleaned: 0, cleanFailed: 0, fari: 0, fariKo: 0 };
             const failReasons = new Map();
             const noteFail = (id, r, verbose = true) => {
                 failReasons.set(id, r);
                 if (verbose) log('Applica fallito', id, r);
             };
             const tryApply = makeSegmentApplier({
-                pnStreet, anStreet, targetAlts, staleOf,
+                pnStreet, anStreet, targetAlts, staleOf, fari: extra,
                 cleanMode: askStaleCleanup(ids, staleOf), tally
             });
 
@@ -4061,7 +5453,7 @@
                     lat: mid ? Number(mid[1].toFixed(7)) : '',
                     lon: mid ? Number(mid[0].toFixed(7)) : '',
                     prima: before || '',
-                    dopo: extra ? `${streetName} (PN citt\u00e0 Nessuno) + AN ${streetName}, ${cityName}` : `${streetName}, ${cityName}`
+                    dopo: (extra ? `${nm.pn} (PN citt\u00e0 Nessuno)` : `${nm.pn}, ${cityName}`) + (anStreet ? ` + AN ${nm.an}, ${cityName}` : '')
                 });
             };
             const esitoDi = (r, skippedBefore) =>
@@ -4091,7 +5483,7 @@
             lastFailedIds = new Set(failReasons.keys());
             updateCapturedUI();
 
-            let msg = applySummary(tally, failReasons, extra, streetName, cityName);
+            let msg = applySummary(tally, failReasons, extra, nm, cityName, !!anStreet);
             if (tally.applied > 0 && suggestedName) {
                 const rule = learnNameRule(suggestedName, streetName);
                 if (rule) msg += ` \u00b7 regola memorizzata: "${rule.from.trim()}" \u2192 "${rule.to.trim()}" (le prossime caselle si precompilano cos\u00ec)`;
@@ -4139,40 +5531,25 @@
         return street;
     }
 
-    // La "citta vuota" (Nessuno) del paese in cui si sta editando
-    function resolveEmptyCity() {
-        const C = sdk.DataModel.Cities;
-        return firstOk(
-            () => {
-                if (!C || typeof C.getAll !== 'function') return null;
-                const c = C.getAll().find(x => x && (x.isEmpty === true || x.name === '' || x.name == null));
-                return (c && c.id != null) ? c : null;
-            },
-            () => {
-                const c = WME().model.cities.getObjectArray().find(x => x.attributes && x.attributes.isEmpty);
-                return c ? { id: c.attributes.id, isEmpty: true } : null;
-            }
-        );
+    // La citta' vuota ("Nessuno"): ce n'e' una per regione (stato), e vicino a un confine
+    // regionale nel modello ne sono caricate piu' d'una. Si prende quella della regione della
+    // citta' vera; se non si capisce quale sia, meglio fermarsi che scrivere quella sbagliata.
+    function resolveEmptyCity(target) {
+        let all = [];
+        try { all = (sdk.DataModel.Cities.getAll() || []).filter(x => x && x.id != null && (x.isEmpty === true || !x.name)); }
+        catch { return null; }
+        if (!all.length) return null;
+        const st = target && target.stateId;
+        const same = st != null ? all.find(x => sameId(x.stateId, st)) : null;
+        if (same) return same;
+        return all.length === 1 ? all[0] : null;
     }
 
-    // Nome alternativo con azione legacy quando l'SDK non lo supporta
-    function legacyAddAlternate(segmentId, streetId) {
-        try {
-            const W = WME();
-            const req = WREQ();
-            if (!W || !req) return false;
-            const AddAlt = req('Waze/Action/AddAlternateStreet');
-            const seg = W.model.segments.getObjectById(segmentId);
-            if (!AddAlt || !seg) return false;
-            if ((seg.getAttribute ? seg.getAttribute('streetIDs') : seg.attributes.streetIDs || []).includes(streetId)) return true;
-            W.model.actionManager.add(new AddAlt(seg, streetId));
-            return true;
-        } catch { return false; }
-    }
-
+    // Solo la citta' richiesta: se non si trova (e non si puo' creare) ci si ferma. Mai una
+    // citta' diversa da quella scelta.
     function resolveCity(cityName) {
         const C = sdk.DataModel.Cities;
-        if (!C) return null;
+        if (!C || !cityName) return null;
         const attempts = [];
         if (cityName) {
             attempts.push(() => (typeof C.getCity === 'function') ? C.getCity({ cityName }) : null);
@@ -4185,7 +5562,6 @@
             });
             attempts.push(() => (typeof C.addCity === 'function') ? C.addCity({ cityName }) : null);
         }
-        attempts.push(() => (typeof C.getTopCity === 'function') ? C.getTopCity() : null);
         for (const fn of attempts) {
             try { const r = fn(); if (r && r.id != null) return r; } catch { /* prossimo */ }
         }
@@ -4205,21 +5581,25 @@
                 righeInAttesaDiSalvataggio: pendingLog.length,
                 righeInCodaDiInvio: logQueue.length,
                 modificheNonSalvate: unsavedCount(),
-                contatoreDisponibile: contatoreOk,
+                salvataggiSeguiti: saveTracking,
+                salvataggioRilevatoCon: saveWay || '(nessun salvataggio ancora visto)',
+                deselezioneCon: clearWay || '(non ancora usata)',
+                sdkMetodiMancanti: sdkMancanti.length ? sdkMancanti.map(m => m.metodo + (m.essenziale ? ' (essenziale)' : '')).join(', ') : 'nessuno',
+                letturaCiviciEsistenti: lastHNScan.segs
+                    ? `${lastHNScan.ok ? 'ok' : 'NON RIUSCITA'} \u00b7 ${lastHNScan.hn} civici + ${lastHNScan.rpp} RPP su ${lastHNScan.segs} segmenti caricati`
+                        + `${lastHNScan.scaricati ? ' (+' + lastHNScan.scaricati + ' non caricati)' : ''}`
+                        + `${lastHNScan.attesi ? ' \u00b7 segmenti con civici secondo il WME: ' + lastHNScan.attesi : ''}`
+                        + `${lastHNScan.come ? ' \u00b7 sorgente: ' + lastHNScan.come : ''}`
+                    : '(elenco civici non ancora aperto)',
                 eventoSalvataggioVisto: saveEventSeen
             };
             console.table(d);
             return d;
         };
         // forza l'invio subito, utile per capire se il foglio risponde
-        w.wfitInvia = () => { promuoviPending('invio forzato dall\'utente'); return flushLogs(); };
+        w.wfitInvia = () => { promuoviPending('invio forzato dall\'utente', 'comando wfitInvia()'); return flushLogs(); };
         // ricontrollo immediato di abilitazione e versione minima
         w.wfitControlla = () => { clearAuthCache(); return controllaAbilitazione(); };
     } catch { /* niente console */ }
-
-    // Hook per test automatici fuori dal browser (in WME "module" non esiste: blocco inerte)
-    if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { parseItFloat, detectMapping, findZipEntry, zipCsvLines, plainCsvLines, parseIndirToRecord, extractDateFromFilename };
-    }
 
 })();

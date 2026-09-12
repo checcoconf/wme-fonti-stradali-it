@@ -3,7 +3,11 @@
 Userscript per il **Waze Map Editor** che confronta i segmenti selezionati con i civici e gli odonimi
 ufficiali **ANNCSU** (Archivio Nazionale dei Numeri Civici e delle Strade Urbane – Istat / Agenzia
 delle Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa, compila nome via/contrada,
-località, comune e inserisce i numeri civici (esponente compreso, es. `343/A`).
+località, comune e inserisce i numeri civici (esponente compreso: `343/A` diventa `343a`, come vuole Waze).
+
+Nomi e civici seguono le guide della [**Wazeopedia Italia**](https://www.waze.com/discuss/c/wazeopedia/italy-wazeopedia/5205)
+(Denominazione delle strade, Numeri civici, Centro abitato & City Boundary) e lo script usa **solo
+l'SDK ufficiale del WME**.
 
 Creato da **checcoconf** · dati: ANNCSU, open data con licenza [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.it).
 
@@ -15,23 +19,22 @@ Creato da **checcoconf** · dati: ANNCSU, open data con licenza [CC-BY 4.0](http
 
 ## Indice
 
-- [Installazione](#installazione)
-- [Accessi e abilitazione](#accessi-e-abilitazione)
-- [Flusso di lavoro in breve](#flusso-di-lavoro-in-breve)
-- [1 · Dati ANNCSU](#1--dati-anncsu)
-- [2 · Segmenti (cattura)](#2--segmenti-cattura)
-- [3 · Il Raggio: la variabile più importante](#3--il-raggio-la-variabile-più-importante)
-- [4 · Confronta con ANNCSU (risultati)](#4--confronta-con-anncsu-risultati)
-- [5 · Applica i nomi ai segmenti](#5--applica-i-nomi-ai-segmenti)
-- [6 · Inserimento dei numeri civici](#6--inserimento-dei-numeri-civici)
-- [Come funzionano gli accessi ANNCSU](#come-funzionano-gli-accessi-anncsu)
-- [Errori e cosa fare](#errori-e-cosa-fare)
-- [Note per gli editor](#note-per-gli-editor)
-- [Licenza](#licenza)
+1. [Installazione](#1--installazione)
+2. [Accessi e abilitazione](#2--accessi-e-abilitazione)
+3. [Flusso di lavoro in breve](#3--flusso-di-lavoro-in-breve)
+4. [Dati ANNCSU](#4--dati-anncsu)
+5. [Segmenti (cattura)](#5--segmenti-cattura)
+6. [Il Raggio](#6--il-raggio)
+7. [Confronta con ANNCSU](#7--confronta-con-anncsu)
+8. [Applica i nomi ai segmenti](#8--applica-i-nomi-ai-segmenti)
+9. [Inserimento dei numeri civici](#9--inserimento-dei-numeri-civici)
+10. [Controlla la zona](#10--controlla-la-zona)
+
+In fondo: [Se qualcosa non funziona](#se-qualcosa-non-funziona) · [Errori e cosa fare](#errori-e-cosa-fare) · [Note per gli editor](#note-per-gli-editor) · [Licenza](#licenza)
 
 ---
 
-## Installazione
+## 1 · Installazione
 
 1. Installa [Tampermonkey](https://www.tampermonkey.net/).
 2. Clicca qui: **[Installa / Aggiorna lo script](https://github.com/checcoconf/wme-fonti-stradali-it/releases/latest/download/wme-fonti-stradali-it.user.js)**
@@ -51,7 +54,7 @@ dubbio: *Tampermonkey → Utility → Controlla aggiornamenti degli userscript*.
 
 ---
 
-## Accessi e abilitazione
+## 2 · Accessi e abilitazione
 
 Lo script è **riservato agli editor abilitati**. La verifica avviene all'avvio, prima che venga
 attivata qualunque funzione: finché non arriva l'OK non si cattura nulla, non si scaricano dati e non
@@ -61,7 +64,7 @@ si disegna niente sulla mappa.
 
 1. Alla partenza lo script legge il tuo **nome utente Waze** (dall'SDK, in mancanza dal modello legacy).
 2. Interroga il foglio Google degli abilitati tramite un Web App Apps Script, inviando nome utente,
-   livello, id e un identificativo di sessione.
+   livello e un identificativo di sessione (l'SDK del WME non espone più l'id numerico dell'utente).
 3. Se sei in elenco, il pannello si apre e tutte le funzioni si attivano.
 4. Se non lo sei, il pannello mostra **401 Unauthorized** con il tuo nome utente e il motivo, più il
    bottone **"Ho ricevuto l'abilitazione: ricontrolla"** per rifare la verifica al volo.
@@ -80,19 +83,23 @@ si disegna niente sulla mappa.
 
 ---
 
-## Flusso di lavoro in breve
+## 3 · Flusso di lavoro in breve
 
 1. **Scarica la tua regione** (una volta sola): i civici ANNCSU restano in cache locale.
 2. **Imposta il Raggio** in base al contesto (predefinito 10 m: paese ~10 m, fuori centro abitato 20–30 m).
-3. **ALT + clic** sui segmenti: si evidenziano sulla mappa ed entrano in lista.
-4. **Confronta con ANNCSU**: per ogni odonimo vedi comune, località, distanza e i civici colorati.
-5. Correggi il nome nella casella se serve, **Applica ai segmenti** e **salva**.
-6. **+N civici su Waze**: elenco di controllo con spunte (ripetizioni, civici già su Waze e civici
-   sovrapposti arrivano senza spunta), poi **Inserisci** e salva di nuovo.
+3. **ALT + clic** sui segmenti: si evidenziano sulla mappa ed entrano in lista. Con **Seleziona tutta la
+   via** prendi in un colpo tutti i tronconi caricati della stessa strada.
+4. **Confronta con ANNCSU**: per ogni odonimo vedi comune, località, distanza, i civici colorati e come
+   è scritta la strada su Waze adesso.
+5. Controlla il nome proposto (e gli avvisi sotto la casella), scegli la città se ti viene chiesto,
+   **Applica ai segmenti** e **salva**.
+6. **+N civici su Waze**: elenco di controllo con spunte. Quelli già su Waze, quelli da fare come RPP e
+   quelli che Waze non accetta arrivano senza spunta. Controlla con **Street View**, poi **Inserisci** e
+   salva di nuovo.
 
 ---
 
-## 1 · Dati ANNCSU
+## 4 · Dati ANNCSU
 
 Sezione **Dati ANNCSU** del pannello.
 
@@ -118,12 +125,12 @@ colonna sbagliata (un progressivo, un codice interno) e il pannello ti avvisa in
 avviso se la cache proviene da una versione precedente dello script, nel qual caso gli esponenti
 possono mancare: basta ripremere *Scarica regione* per rigenerarla.
 
-**Elenco comuni.** I codici Belfiore vengono tradotti in nomi di comune usando l'elenco ISTAT
-incorporato nello script, quindi funziona anche offline.
+**Elenco comuni.** I codici Belfiore vengono tradotti in nomi di comune con l'elenco ISTAT di
+`data/comuni.json`, che Tampermonkey scarica insieme allo script: funziona anche offline.
 
 ---
 
-## 2 · Segmenti (cattura)
+## 5 · Segmenti (cattura)
 
 ### Modalità di cattura
 
@@ -136,7 +143,7 @@ Menu **Cattura**:
 | **⌃/⌘⌥ CTRL + ALT + clic** | idem, su combinazione ancora più libera |
 | **⌨ Un tasto a tua scelta + clic** | vedi sotto |
 | **Sempre** | ogni clic su un segmento lo mette in lista |
-| **Spenta** | nessuna cattura al clic: si usa solo *Aggiungi selezione attuale* |
+| **Spenta** | nessuna cattura al clic |
 
 MAIUSC e CTRL **da soli** non sono selezionabili di proposito: il WME li usa per la multi-selezione.
 Se l'SDK lo consente, la scorciatoia **A + C** cicla al volo fra le modalità.
@@ -148,6 +155,10 @@ Resta salvato anche nelle sessioni successive. Mentre lo tieni premuto lo script
 scorciatoia WME sullo stesso tasto, ma conviene comunque sceglierne uno poco usato: i tasti singoli
 sono la fascia che WME, Toolbox e gli altri script si contendono.
 
+> **Lavora per tratti brevi.** Cattura i segmenti che stai davvero guardando, non tutta la via in un
+> colpo: il nome sui cartelli può cambiare da un tratto all'altro, e il confronto con i civici già su
+> Waze vale solo su ciò che l'editor ha caricato.
+
 ### La lista dei segmenti
 
 I segmenti catturati compaiono come **chip** sotto il menu:
@@ -155,7 +166,6 @@ I segmenti catturati compaiono come **chip** sotto il menu:
 - clic sul chip → lo seleziona nell'editor;
 - clic sulla **×** (o ri-clic sul segmento con il modificatore) → lo toglie dalla lista;
 - **chip rosso** → su quel segmento l'ultimo *Applica* è fallito;
-- **Aggiungi selezione attuale** → porta in lista ciò che hai già selezionato nel WME;
 - **Svuota lista** → azzera tutto (risultati e civici sulla mappa si riallineano da soli).
 
 ### Le altre opzioni
@@ -163,37 +173,32 @@ I segmenti catturati compaiono come **chip** sotto il menu:
 | Opzione | Cosa fa |
 |---|---|
 | **Evidenzia** | colore del tratteggio con cui i segmenti in lista vengono marcati sulla mappa (ciano, fucsia, giallo, lime, arancione) |
-| **Raggio (m)** | distanza massima civico–segmento per il confronto → [sezione dedicata](#3--il-raggio-la-variabile-più-importante) |
-| **Formato Waze** | applica il maiuscolo/minuscolo delle linee guida italiane (`VIA MARGHERITA DI SAVOIA` → `Via Margherita di Savoia`), rispettando numeri romani e preposizioni |
+| **Raggio (m)** | distanza massima civico–segmento per il confronto → [Il Raggio](#6--il-raggio) |
+| **Formato Waze** | scrive il nome con maiuscole e minuscole all'italiana (`VIA MARGHERITA DI SAVOIA` → `Via Margherita di Savoia`). Spegnendola resta il maiuscolo di ANNCSU, ma le altre correzioni (sigle, date, abbreviazioni) valgono comunque |
 | **Auto-analisi** | il confronto riparte da solo a ogni modifica della lista |
 | **Civici sulla mappa** | disegna i punti ANNCSU etichettati col numero (343, 343/A…), colorati per odonimo |
 | **Pallini** | dimensione dei punti e dei numeri disegnati sulla mappa: *Piccoli*, *Normali* (predefinito), *Grandi*, *Molto grandi*, *Enormi*. Comodo su schermi grandi o quando i civici sono fitti; non cambia nulla di ciò che finisce su Waze. Compare solo con *Civici sulla mappa* attivo |
-| **Applica come** | regola di scrittura dell'indirizzo → [sezione Applica](#5--applica-i-nomi-ai-segmenti) |
+| **Applica come** | regola di scrittura dell'indirizzo → [Applica](#8--applica-i-nomi-ai-segmenti) |
 
 ---
 
-## 3 · Il Raggio: la variabile più importante
+## 6 · Il Raggio
 
 Il **Raggio** è la distanza massima, in metri, entro cui un civico ANNCSU viene considerato
 "appartenente" ai segmenti che hai in lista. È la variabile che determina la corrispondenza fra
 numerazione civica e segmento selezionato: **più il valore tende verso lo zero, più l'accuratezza è
 precisa**.
 
-Il campo parte da **10 m** e accetta valori da **1 a 1000 m**. Il valore giusto si trova partendo
-stretti e allargando poco per volta, non il contrario.
+Il campo parte da **10 m** e accetta valori da **1 a 50 m**: oltre i 45 m Waze rifiuta i civici, quindi
+un raggio più largo gonfierebbe solo i risultati. Il valore giusto si trova partendo stretti e
+allargando poco per volta, non il contrario.
 
-### Come funziona tecnicamente
+### Come lo usa lo script
 
-1. Per ogni segmento in lista lo script calcola il rettangolo che lo contiene, allargato del raggio.
-2. Cerca in quel rettangolo, tramite una griglia spaziale, tutti i punti ANNCSU della cache.
-3. Per ognuno calcola la **distanza reale punto → polilinea** (non dal centro né dai vertici: dalla
-   linea del segmento).
-4. Scarta tutto ciò che supera il raggio; il resto viene raggruppato per odonimo.
-5. Lo stesso civico agganciato da più segmenti della lista (una via spezzata in tronconi, le due
-   carreggiate di un viale, una laterale catturata insieme) viene contato **una sola volta**, con la
-   distanza minima trovata.
-
-Alla fine restano al massimo **8 odonimi**, ordinati per distanza, ciascuno col proprio colore.
+Per ogni segmento in lista lo script cerca i civici ANNCSU entro il raggio, misurando la distanza dalla
+**linea del segmento** (non dal centro né dai vertici). Li raggruppa per odonimo e tiene una sola volta
+il civico agganciato da più tronconi della stessa via. Restano al massimo **8 odonimi**, ordinati per
+distanza, ciascuno col suo colore.
 
 ### Valori consigliati
 
@@ -201,7 +206,7 @@ Alla fine restano al massimo **8 odonimi**, ordinati per distanza, ciascuno col 
 |---|---|---|
 | **Strada di paese / centro abitato** | **~10 m** | i segmenti sono corti e le vie parallele sono vicine: un raggio stretto evita di agganciare i civici della via accanto |
 | **Fuori dal centro abitato / contrade** | **~20–30 m** | i segmenti sono molto più lunghi, gli edifici arretrati dalla strada e non tutti i civici sono inseriti dall'ente comunale |
-| **Ricognizione iniziale** | 50–100 m | utile solo per capire *quali* odonimi insistono sulla zona, mai per applicare o inserire |
+| **Ricognizione iniziale** | fino a 50 m | utile solo per capire *quali* odonimi insistono sulla zona, mai per applicare o inserire |
 
 Il valore predefinito è **10 m**: buono per la stragrande maggioranza delle strade di paese e di città.
 
@@ -211,9 +216,8 @@ Il valore predefinito è **10 m**: buono per la stragrande maggioranza delle str
   sugli ingressi, non sull'asse stradale: spesso sono a 5–20 m dalla mezzeria. Un raggio troppo
   stretto taglia fuori numeri veri, soprattutto dove la carreggiata è larga o c'è un marciapiede
   ampio.
-- **Oltre i 45 m il raggio non serve all'inserimento.** Waze rifiuta i civici troppo lontani dal
-  segmento: quelli oltre **45 m** vengono comunque esclusi dall'elenco di inserimento (te lo scrive).
-  Un raggio di 100 m gonfia solo i risultati con roba inutilizzabile.
+- **Oltre i 45 m i civici non si possono inserire.** Waze li rifiuta, quindi anche col raggio a 50 m
+  quelli più lontani restano fuori dall'elenco di inserimento (te lo scrive).
 
 ### ✅ Raggio configurato bene
 
@@ -240,7 +244,7 @@ appartiene a quale strada. Applicare o inserire in queste condizioni significa s
 
 ---
 
-## 4 · Confronta con ANNCSU (risultati)
+## 7 · Confronta con ANNCSU
 
 Con **Auto-analisi** attiva il confronto parte da solo a ogni cattura; altrimenti premi
 **🔍 Confronta con ANNCSU**.
@@ -248,40 +252,84 @@ Con **Auto-analisi** attiva il confronto parte da solo a ogni cattura; altriment
 Per ogni odonimo trovato compare una scheda con:
 
 - il **nome originale ANNCSU** (in maiuscolo, come nell'archivio);
-- una **casella modificabile** con il nome già formattato secondo le linee guida Waze;
+- una **casella modificabile** con il nome già pronto per Waze;
 - **Comune**, **Località/contrada**, **distanza minima** dal segmento, **numero di civici distinti** e
   la **data del dataset** ANNCSU da cui provengono;
 - il **pallino colorato** che corrisponde ai punti disegnati sulla mappa;
+- la spunta **✓ nome principale già così su N di M segmenti** quando su Waze c'è già il nome proposto;
 - i bottoni **Copia**, **Applica ai segmenti**, **+N civici su Waze**.
+
+In testa ai risultati la riga **Su Waze ora** dice come sono scritti adesso i segmenti in lista
+(es. `Via Roma, Andria (4) · (senza strada) (1)`), così vedi subito se c'è qualcosa da fare.
+
+Sotto la casella possono comparire:
+
+- **avvisi in arancione** quando c'è qualcosa che solo tu puoi decidere (per esempio `S.` o `SS.`: San,
+  Santa, Santo, Santi o Santissima?);
+- per le **strade con sigla**, come verrà divisa fra nome principale e alternativi;
+- il menu **Città** quando ANNCSU indica una località diversa dal comune: puoi scegliere fra il comune
+  e la forma per le frazioni, `frazione, comune` (es. `Miramare, Rimini`). La località
+  ANNCSU non è sempre una frazione: decidi guardando i cartelli di inizio centro abitato.
+
+### Il nome proposto
+
+Nella casella trovi il nome già scritto come lo vuole Waze Italia: maiuscole e minuscole a posto,
+accenti, sigle (`SP20bis`), date in numeri arabi (`Via 4 Novembre`), ordinali con l'apice (`2ª Traversa`),
+abbreviazioni sciolte (`Mons.` → `Monsignor`). Le lettere puntate di nome proprio vengono tolte, perché
+il navigatore non le legge.
+
+Resta modificabile: quello che scrivi tu vince sempre.
+
+Quando lo script non può decidere da solo compare un **avviso arancione** sotto la casella. Il caso
+tipico è `S.` o `SS.`: solo tu sai se è San, Santa, Santo, Santi o Santissima, quindi scrivilo per
+esteso prima di applicare.
+
+Se la strada ha una **sigla** (SS, SR, SP, NSA, autostrada), una riga ti dice cosa finirà nel nome
+principale e cosa negli alternativi.
+
+Se ANNCSU indica una **località** diversa dal comune compare il menu **Città**, per scegliere fra il
+comune e la forma `frazione, comune`. La località ANNCSU non è sempre una frazione: decidi guardando i
+cartelli di inizio centro abitato.
+
+Le liste usate per i nomi (abbreviazioni, preposizioni, cognomi con particella) stanno in
+`data/odonimi.json`: si correggono lì, senza toccare lo script.
 
 **Il nome si impara.** Se correggi il nome proposto (per esempio da `Strada Contrada Fontanelle` a
 `Contrada Fontanelle`) lo script memorizza la regola e precompila così anche le schede successive. Per
 questo caso classico c'è pure il link rapido *usa "Contrada…"*.
 
 **Civici ripetuti.** Se lo stesso numero compare su più record ANNCSU distinti, un avviso in testa ai
-risultati te lo dice: sono mostrati tutti, ma nell'elenco di inserimento arrivano senza spunta (vedi
-[Come funzionano gli accessi ANNCSU](#come-funzionano-gli-accessi-anncsu)).
+risultati te lo dice: sono mostrati tutti, ma nell'elenco di inserimento arrivano senza spunta.
 
 ---
 
-## 5 · Applica i nomi ai segmenti
+## 8 · Applica i nomi ai segmenti
 
 ### Le due modalità
 
 | Modalità | Cosa scrive |
 |---|---|
 | **Dentro il centro abitato** | Nome primario = via **con** città |
-| **Fuori centro abitato** *(regola IT)* | Nome primario = via con città **"Nessuno"** + nome alternativo = via **con** città |
+| **Fuori centro abitato** *(regola IT)* | Nome primario = via con città **"Nessuno"** + nome alternativo = via **con** città + **obbligo fari accesi** |
+
+Scegli la modalità **prima** di premere Applica: è la casella *Applica come* nel pannello.
+
+Con una strada che ha una **sigla** (SS, SR, SP, NSA, autostrade) lo script mette da solo la sigla nel
+nome principale e il nome esteso negli alternativi. Nella scheda vedi in anticipo come verrà scritta.
 
 ### Cosa fa esattamente *Applica ai segmenti*
 
 - Tocca **solo ciò che differisce**: i segmenti già a posto vengono saltati e conteggiati a parte.
-- **Preserva gli alternativi esistenti**: aggiunge senza togliere.
+- **Preserva gli alternativi esistenti**: aggiunge senza togliere, e verifica che nessuno sparisca.
 - Se trova alternativi **non conformi** alle impostazioni, li elenca in una finestra di conferma e li
-  rimuove **solo se dai l'OK**; altrimenti li lascia dove sono.
-- Dopo ogni scrittura **rilegge il segmento** per verificare che il WME abbia registrato davvero: se
-  la prima strategia non funziona ne prova un'altra, e se nemmeno quella riesce il segmento finisce
-  fra i falliti (niente successi fantasma).
+  rimuove **solo se dai l'OK**; altrimenti li lascia dove sono. Le sigle non finiscono mai in
+  quell'elenco. Leggi la finestra prima di confermare: fra gli alternativi possono esserci nomi locali
+  o, nelle regioni bilingui, il nome nella seconda lingua.
+- **Fuori dal centro abitato** imposta anche l'attributo **obbligo accensione dei fari**.
+- **Rampe** e segmenti **non carrabili** non vengono toccati.
+- In **modalità snapshot**, **modalità pratica** o con l'editor in sola lettura non scrive niente.
+- Dopo ogni scrittura **rilegge il segmento** per verificare che la modifica sia passata davvero: se
+  non passa, il segmento finisce fra i falliti (niente successi fantasma).
 - I segmenti **fuori dall'area caricata** vengono recuperati spostando la mappa uno per uno.
 - Alla fine il riepilogo dice quanti modificati, quanti già a posto, quanti alternativi riallineati e
   quanti falliti, con il motivo.
@@ -290,7 +338,7 @@ Poi **salva** (Ctrl+S).
 
 ---
 
-## 6 · Inserimento dei numeri civici
+## 9 · Inserimento dei numeri civici
 
 Il bottone **+N civici su Waze** apre l'**elenco di controllo**: nulla viene scritto sulla mappa
 finché non confermi.
@@ -298,38 +346,71 @@ finché non confermi.
 **Prerequisiti:** una strada **con nome** e **nessuna modifica pendente** (il WME vieta di aggiungere
 civici su segmenti modificati). Se manca qualcosa, lo script te lo dice prima.
 
+Nella casella il numero è già nel formato che Waze accetta: `343/A` di ANNCSU diventa `343a`. Quelli
+che Waze non accetta (`20/1`, `12/BIS`) restano in lista ma senza spunta, e vanno inseriti a mano.
+
+Ogni civico viene agganciato al segmento **della sua via** più vicino, così un civico d'angolo non
+finisce sulla traversa.
+
 ### Cosa vedi nell'elenco
 
 | Elemento | Significato |
 |---|---|
 | **Spunta** | il civico verrà inserito |
-| **Numero modificabile** | si normalizza da solo: `18b` → `18/B`, `12 bis` → `12/BIS` |
+| **Numero modificabile** | già nel formato Waze; si normalizza da solo: `18/B`, `18 B` → `18b` |
 | **Distanza** | quanto dista il punto ANNCSU dal segmento |
 | Riga con bordo **azzurro** | **già su Waze**: esiste un civico con lo stesso numero entro 40 m → spunta tolta |
 | Riga con bordo **arancione** | **già su Waze ma posizionato male**: il numero esiste su questa strada, ma a più di 40 m dal punto ANNCSU → spunta tolta, va **spostato** non aggiunto (vedi sotto) |
 | Riga con bordo **giallo** | **ripetizione**: lo stesso numero su un altro record ANNCSU → spunta tolta, decidi tu |
 | Riga con bordo **viola** | **civici sovrapposti**: due o più punti sulla stessa identica coordinata (meno di 1,5 m) → tutto il gruppo senza spunta, scegli tu quali inserire e poi vanno spostati (vedi sotto) |
-| Riga con bordo **rosso** | numero in **forma 20/1** → vedi sotto |
+| Riga con bordo **ocra** | **lato o sequenza insoliti**: un dispari in mezzo ai pari (o viceversa), o un numero fuori ordine lungo la via → spunta tolta. Sono i due errori che Waze contesta al salvataggio (*lato errato*, *fuori sequenza*): controlla su Street View; se il civico è giusto spuntalo e al salvataggio va **forzato** |
+| Riga con bordo **verde acqua** | **accesso su un'altra via**: il punto ANNCSU è più vicino a un'altra strada con nome che alla sua → spunta tolta; se l'ingresso è davvero lì serve un **luogo residenziale (RPP)**, non un civico |
+| Riga azzurra *già su Waze come RPP* | su questa via esiste già un luogo residenziale con quel numero: non va aggiunto anche come civico |
+| Riga con bordo **rosso** | numero in un **formato che Waze non accetta** (`20/1`, `12/BIS`) → vedi sotto |
 | Riga esclusa | oltre **45 m** dalla strada: Waze la rifiuterebbe, va inserita a mano |
 
-Un clic sulla riga **centra la mappa** su quel civico, così puoi confrontarlo con Street View.
+Un clic sulla riga **centra la mappa** su quel civico; il bottone con l'**occhio** apre direttamente **Street View**
+su quel punto. Al contrario, un clic su un **pallino sulla mappa** evidenzia la sua riga nell'elenco.
+
+**RPP** è il *Residential Point Place*: un Place residenziale con via e numero civico, e il punto di
+arrivo sull'ingresso. Serve quando l'ingresso è su una strada diversa da quella dell'indirizzo
+(controviali, case con accesso laterale). Lo stesso indirizzo non va messo sia come RPP sia come civico
+normale.
+
+### Creare un RPP
+
+Il bottone **RPP** compare **solo sulle righe verde acqua**, quelle in cui l'accesso sembra su un'altra
+via: sui civici normali non serve e non c'è. Premendolo lo script chiede conferma e poi crea:
+
+- un **Place residenziale** nel punto del civico ANNCSU;
+- **via e numero civico** dell'indirizzo (la via dell'odonimo, non quella dell'accesso);
+- il **punto di arrivo** sulla strada dell'accesso, nel punto più vicino al civico.
+
+La riga esce dall'elenco dei civici da inserire, perché lo stesso indirizzo non va messo due volte.
+Il Place resta da controllare: guarda punto e indirizzo nel pannello del Place, poi **salva tu** con
+Ctrl+S. Se il tuo editor non espone i metodi per i Place, il bottone non compare.
 
 ### Come vengono trovati i civici già presenti
 
-Il controllo non guarda solo i segmenti che hai in lista: legge dall'SDK i civici di **tutti i segmenti
-della stessa via caricati nell'editor**, riconosciuti per **ID della strada** (primario o alternativo)
-e non per nome scritto, così due vie omonime in comuni diversi restano separate.
+Sotto la legenda una riga dice **su quanti civici già su Waze è stato fatto il confronto**.
 
-Serve perché un civico già presente non sta quasi mai sul pezzo che hai catturato: il `5` può trovarsi
-cento metri più avanti, su un altro troncone dello stesso odonimo o sulla carreggiata gemella.
-Guardando solo i segmenti in lista quel `5` risultava mancante e veniva riproposto per l'inserimento.
+Se al suo posto compare un **avviso rosso**, vuol dire che su quella via dei civici ci sono, ma l'editor
+non li ha caricati e quindi lo script non può sapere quali numeri esistono già. Succede quando sei
+troppo lontano, perché il WME i civici li carica solo da vicino. Avvicinati sul tratto che stai
+lavorando e riapri l'elenco. Se vai avanti lo stesso, controlla tu sulla mappa: i doppioni verrebbero
+rifiutati al salvataggio.
 
-Subito sotto l'intestazione dell'elenco è scritto **su cosa è stato fatto il confronto**: quanti civici
-già su Waze, su quanti segmenti della via.
+**Un numero già presente su questa via non viene mai inserito**, nemmeno se spunti la riga a mano. Se
+quello sulla mappa è messo male, la cosa giusta è **trascinarlo** sul punto corretto.
 
-> **Limite da conoscere:** si vede solo ciò che l'editor ha **caricato**. Se la via è lunga e ne hai a
-> schermo solo un pezzo, un doppione fuori vista non può essere rilevato. Prima di aprire l'elenco,
-> allarga la vista su tutta la strada.
+
+Il confronto non guarda solo i segmenti che hai in lista: legge i civici di **tutti i tronconi della
+stessa via caricati nell'editor**. Serve perché un civico già presente spesso non sta sul pezzo che hai
+catturato, ma cento metri più avanti.
+
+Il limite è che si vede solo ciò che l'editor ha **caricato in quel momento**. Per questo conviene
+lavorare per tratti brevi, da vicino, sul pezzo di strada che stai guardando: così il confronto è
+sempre valido. La riga sotto la legenda ti dice comunque su quanti segmenti è stato fatto.
 
 ### Civici già presenti ma posizionati male
 
@@ -342,8 +423,8 @@ Il controllo sui civici già presenti è doppio:
 2. **stesso numero sulla stessa strada ma oltre 40 m** → *già su Waze ma posizionato male*, riga
    arancione con la distanza (`già su Waze ma a ~120 m: da spostare, non da aggiungere`).
 
-Il controllo guarda **solo i civici dei segmenti che hai in lista**: un `5` di una via vicina non fa
-scattare nulla.
+Il controllo guarda **solo i civici della stessa via** (segmenti in lista e altri tronconi caricati
+con la stessa strada): un `5` di una via vicina non fa scattare nulla.
 
 **Cosa fare:** apri il civico che c'è già e **trascinalo** sul punto corretto. È l'unica strada giusta:
 Waze accetta **un solo punto per numero** sulla stessa via, quindi aggiungerne un secondo non
@@ -372,10 +453,8 @@ Lo script raggruppa i civici che distano **meno di 1,5 m** fra loro e li present
 - al termine dell'inserimento il riepilogo lo ripete, dicendoti quanti civici sono nati sullo stesso
   punto e vanno separati.
 
-> **La soglia è volutamente strettissima.** 1,5 m è l'ordine di grandezza dell'arrotondamento delle
-> coordinate nell'archivio (5–6 decimali ≈ un metro): serve a prendere solo i punti *coincidenti*. I
-> civici semplicemente **vicini** — due portoni a 4–6 m, normalissimi in centro storico — restano
-> righe indipendenti e **spuntate**, perché sono civici veri e distinti.
+> I civici semplicemente **vicini** (due portoni a 4–6 m, normali in centro storico) non finiscono qui:
+> restano righe indipendenti e spuntate.
 
 **Cosa fare:** clicca la riga per centrare la mappa sul punto e guarda il posto su Street View.
 
@@ -385,26 +464,23 @@ Lo script raggruppa i civici che distano **meno di 1,5 m** fra loro e li present
   sul proprio portone. È la via più rapida, perché il numero è già scritto e non lo devi digitare.
 
 In entrambi i casi lo spostamento va fatto **prima di salvare**: due punti sovrapposti sulla mappa
-restano illeggibili per chi guida e possono far scattare i controlli di Waze. In alternativa puoi
+restano illeggibili per chi naviga e possono far scattare i controlli di Waze. In alternativa puoi
 inserirne uno solo adesso e creare gli altri con **+ Aggiungi al centro mappa**, dopo aver centrato la
 mappa sul portone giusto: nascono già nella posizione corretta.
 
-### Numeri in forma `20/1`
+### Numeri che Waze non accetta (`20/1`, `12/BIS`)
 
-Un numero come `2/4` può essere un civico reale, un intervallo scritto male o una colonna del CSV letta
-male. La barra sopra la lista permette di decidere una volta per tutte:
+Waze vuole un numero seguito da al massimo due lettere minuscole. Un esponente numerico (`2/4`, spesso
+una colonna del CSV letta male) o di più lettere (`BIS`, `TER`) non si può inserire così com'è: la riga
+resta senza spunta con l'avviso *formato non accettato da Waze*. Se hai verificato che il numero giusto
+è un altro, correggilo nella casella e spuntalo; altrimenti va inserito a mano.
 
-| Scelta | Effetto |
-|---|---|
-| **non inserito** *(predefinito)* | restano visibili ma senza spunta |
-| **includi** | trattati come civici normali, già spuntati |
-| **escludi** | tolti dalla lista |
-
-La scelta resta salvata fra le sessioni.
+La barra sopra la lista li **mostra** (predefinito) o li **nasconde** tutti insieme; la scelta resta
+salvata fra le sessioni.
 
 ### Aggiungere un civico letto su Street View
 
-Con **+ Aggiungi al centro mappa**: centra la mappa sul portone, scrivi il numero e premi. La riga
+Con **+ Aggiungi al centro mappa**: centra la mappa sul portone, scrivi il numero (es. `18b`) e premi. La riga
 nasce lì, già spuntata. Se il centro mappa è a più di 45 m dai segmenti in lista lo script te lo
 impedisce, perché Waze lo rifiuterebbe.
 
@@ -412,39 +488,85 @@ impedisce, perché Waze lo rifiuterebbe.
 
 **Inserisci** scrive tutti i civici spuntati (senza limite di numero), lavorando a piccoli lotti. Se
 hai spuntato lo stesso numero in più punti lo script ti avvisa: Waze ne accetta uno solo per via.
+Se hai spuntato a mano un numero già fatto come RPP o con l'accesso su un'altra via, prima di inserire
+ti chiede conferma.
 Al termine arriva un riepilogo con inseriti, saltati e motivi dei rifiuti. **Poi salva.**
 
 ---
 
-## Come funzionano gli accessi ANNCSU
+## 10 · Controlla la zona
 
-Nell'archivio ANNCSU l'unità di base **non è il civico, è l'accesso**. Ogni riga del file `INDIR_` è un
-punto di accesso georiferito (`PROGRESSIVO_ACCESSO`) con odonimo, località, civico, esponente e
-coordinate. Capire questo spiega quasi tutte le stranezze che vedi nell'elenco.
+Il bottone **🗺️ Controlla la zona** dice da dove cominciare in un quartiere. Confronta le strade
+visibili a schermo con ANNCSU e le colora, **senza modificare niente**: non tocca nomi, non inserisce
+civici, non lascia modifiche da salvare.
 
-**Un civico può avere più accessi.** Portone principale, passo carrabile, ingresso secondario: sono
-record distinti dell'archivio con lo **stesso numero**. Lo script li mostra **tutti**, marcati come
-ripetizione e senza spunta, indicando anche a quanti metri sta il "gemello":
+I colori funzionano come un semaforo, dal peggio al meglio. Le strade colorate sono **piene**; il
+**tratteggio** che vedi è un'altra cosa: sono i segmenti che hai in lista, nel colore scelto in
+*Evidenzia*, e non fanno parte del controllo (la scheda te lo ricorda).
 
-- pochi metri di distanza → quasi sempre lo stesso accesso rilevato due volte;
-- decine di metri → secondo accesso reale, oppure errore d'archivio.
+| Colore | Cosa vuol dire |
+|---|---|
+| 🔴 **rosso** | strada **senza nome**: qui manca tutto, si parte da zero |
+| 🟡 **giallo** | il nome su Waze è **diverso** da ANNCSU: c'è qualcosa da verificare prima di toccare |
+| 🟢 **verde** | nome a posto, **mancano solo i civici** (almeno 5): si può lavorare subito |
 
-Solo tu, guardando il territorio e Street View, puoi decidere quale posizione è quella giusta:
-**Waze accetta un solo punto per numero sulla stessa via**.
+Le strade **già fatte non compaiono**: se il nome coincide e su Waze ci sono gli stessi civici di ANNCSU,
+non c'è niente da segnalare. In fondo alla scheda trovi comunque quante ne ha trovate a posto, così sai
+che il controllo le ha guardate. Il confronto è sui **numeri**, non sulle quantità: una via con otto
+civici diversi da quelli ANNCSU risulta da lavorare, non a posto.
 
-**Esistono accessi senza numero.** Sono record validi (l'archivio li usa per ingressi non numerati):
-contano nel totale dei civici distinti dell'odonimo, si vedono come puntini sulla mappa, ma non
-compaiono nell'elenco di inserimento perché non c'è nessun numero da scrivere. Se due accessi senza
-numero cadono nello stesso identico punto, il secondo viene scartato: non aggiungerebbe nulla da
-valutare.
+È una **modalità di sola lettura**: mostra sulla mappa quello che c'è in banca dati e lo colora. Oltre
+alle strade colorate compaiono i **civici ANNCSU** con il numero, così vedi subito dove puntare; per le
+vie verdi sono i civici che su Waze ancora non ci sono.
 
-**L'esponente arriva dall'archivio, non è inventato.** `343/A` nasce da `CIVICO=343` + `ESPONENTE=A`,
-oppure da un campo unico `343/A`. Se la colonna esponente risulta anomala (più di metà dei civici ne ha
-uno) lo script lo segnala nel pannello invece di appiccicare un `/n` a ogni numero.
+> **Serve soprattutto nelle zone agro e nelle contrade**, dove le strade sono poche, lunghe e spesso
+> senza nome: lì una vista larga ti fa capire in un colpo d'occhio da dove cominciare. In centro abitato
+> rende molto meno, perché con la vista larga si superano subito le **500 strade** del limite e la
+> scheda diventa un elenco infinito. Quel limite non è un difetto: su Waze si lavora **di precisione**,
+> un tratto per volta, e il controllo serve a scegliere dove andare, non a sostituire il lavoro fatto
+> segmento per segmento.
 
-**Un accesso viene agganciato a un odonimo, non a un segmento.** Il raggruppamento è
-`comune + odonimo + località`: per questo lo stesso confronto può restituire più schede, e per questo
-un raggio troppo largo fa comparire odonimi che con il tuo segmento non c'entrano niente.
+Sotto il bottone compare l'elenco di quello che ha trovato, diviso per colore: un clic su una riga
+centra la mappa su quella strada e la seleziona nell'editor, pronta da lavorare.
+
+Finché il controllo è acceso **segue la mappa**: sposti la vista, ti fermi, e il controllo si rifà da
+solo sulla zona nuova. Con lo stesso bottone (*Togli i colori*) si spegne tutto.
+
+**Come leggerlo bene:**
+
+- all'accensione lo script **si porta da solo allo zoom 16**, abbastanza largo da capire dove cominciare:
+  da lì giri la mappa e il controllo ti segue. Se dopo ti allontani, i colori spariscono e la scheda ti
+  dice di riavvicinarti;
+- la spunta **"nascondi le strade che non posso modificare"** tiene fuori le strade bloccate a un
+  livello superiore al tuo: vedi solo il lavoro che puoi fare davvero. Togliendola ricompaiono, con il
+  lucchetto 🔒 accanto al nome. La scelta resta salvata;
+- la vista non deve contenere più di 500 strade: se sono troppe lo script te lo dice invece di macinare
+  mezza città;
+- **non usa il Raggio del pannello**: quello vale quando scegli tu i segmenti. Qui ogni civico ANNCSU a
+  schermo viene assegnato alla strada più vicina (fino a 25 m), una volta sola, quindi due vie parallele
+  non si contendono gli stessi numeri;
+- i **civici mancanti** si contano su quelli che l'editor ha già caricato, e il WME li carica solo da
+  vicino. Dove non li ha ancora, lo script non segnala niente per quelle strade (nessun falso allarme) e
+  scrive quante non ha potuto valutare: avvicinati un altro po' e il controllo si rifà da solo. Il rosso
+  e il giallo invece valgono sempre;
+- una segnalazione **non è un errore certo**: ANNCSU può avere un odonimo diverso da quello sui
+  cartelli. Controlla sempre prima di cambiare.
+
+---
+
+## Se qualcosa non funziona
+
+Quasi tutti i problemi si risolvono con tre mosse:
+
+1. **Salva** (Ctrl+S) e riprova: con modifiche non salvate il WME non accetta nuovi civici.
+2. **Avvicinati** sul tratto che stai lavorando e riapri l'elenco: lo script vede solo quello che
+   l'editor ha caricato, e i civici già presenti li carica solo da vicino.
+3. **Ricarica la pagina** dell'editor.
+
+Quando lo script non riesce a fare una cosa te lo dice a schermo, con il motivo: leggi il messaggio,
+spesso contiene già la soluzione. Gli errori più comuni sono elencati [qui sotto](#errori-e-cosa-fare).
+
+Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il permalink della zona.
 
 ---
 
@@ -461,8 +583,12 @@ un raggio troppo largo fa comparire odonimi che con il tuo segmento non c'entran
 | *lato errato* / *fuori sequenza* | Waze contesta la posizione | ricontrolla i punti; se sono corretti sul territorio usa **Salva → Forza** |
 | *troppo lontano dal segmento* | oltre il limite Waze | piazzalo a mano vicino alla strada e trascinalo sul punto reale |
 | *fuori dall'area caricata* | segmento non caricato nell'editor | torna sulla zona e ripremi *Applica* |
-| *comune non risolvibile via SDK* | il comune non esiste ancora nel modello | impostalo una volta a mano su un segmento vicino |
-| *città vuota ("Nessuno") non trovata* | serve per la regola fuori centro abitato | apri o aggiungi in zona un segmento senza città e riprova |
+| *città non risolvibile via SDK* | il comune (o la frazione) non esiste ancora nel modello | impostalo una volta a mano su un segmento vicino |
+| *città vuota ("Nessuno") della regione giusta non trovata* | serve per la regola fuori centro abitato | apri o aggiungi in zona un segmento senza città e riprova |
+| *rampa: …* | hai catturato una rampa | toglila dalla lista: le rampe non si nominano con ANNCSU |
+| *formato non accettato da Waze* | esponente numerico o di più di due lettere | inseriscilo a mano |
+| *accesso su …* | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il bottone **RPP** |
+| *sei in modalità snapshot / pratica* | l'editor non salverebbe le modifiche | esci dalla modalità e riprova |
 | *Nessun civico ANNCSU entro N m* | raggio troppo stretto o comune non ancora georiferito | allarga il raggio; se resta vuoto, il Comune non ha caricato le coordinate |
 
 ---
@@ -479,9 +605,18 @@ un raggio troppo largo fa comparire odonimi che con il tuo segmento non c'entran
 
 ## Licenza
 
-MIT — vedi [LICENSE](LICENSE).
+Copyright © 2026 **Francesco Conforti** (checcoconf).
+
+Codice: **GPL-3.0-or-later** — vedi [LICENSE](LICENSE) e [NOTICE](NOTICE).
+
+Puoi usarlo, studiarlo, modificarlo e ridistribuirlo. Se lo ridistribuisci modificato devi citare
+l'autore, dire che si tratta di una versione modificata e pubblicare il codice con la stessa licenza.
+Il nome *WME Fonti Stradali IT* identifica il progetto originale: le versioni derivate ne usino uno
+diverso.
 
 Dati: [ANNCSU](https://www.anncsu.gov.it/it/) (Istat / Agenzia delle Entrate), open data con licenza
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.it).
+
+Waze e Waze Map Editor sono marchi di Waze Mobile / Google. Progetto indipendente, non affiliato.
 
 💬 Info, idee o problemi? Scrivimi su **Slack**: [`@checcoconf`](https://slack.com/app_redirect?channel=U0BHX22AFHS) (workspace della community italiana Waze).
