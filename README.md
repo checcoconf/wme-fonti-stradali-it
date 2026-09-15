@@ -28,7 +28,7 @@ Creato da **checcoconf** · dati: ANNCSU, open data con licenza [CC-BY 4.0](http
 7. [Confronta con ANNCSU](#7--confronta-con-anncsu)
 8. [Applica i nomi ai segmenti](#8--applica-i-nomi-ai-segmenti)
 9. [Inserimento dei numeri civici](#9--inserimento-dei-numeri-civici)
-10. [Controlla la zona](#10--controlla-la-zona)
+10. [Traccia le vie dell'agro](#10--traccia-le-vie-dellagro)
 
 In fondo: [Se qualcosa non funziona](#se-qualcosa-non-funziona) · [Errori e cosa fare](#errori-e-cosa-fare) · [Note per gli editor](#note-per-gli-editor) · [Licenza](#licenza)
 
@@ -142,8 +142,7 @@ Menu **Cattura**:
 | **⌥⇧ ALT + MAIUSC + clic** | alternativa se ALT ti serve per altro |
 | **⌃/⌘⌥ CTRL + ALT + clic** | idem, su combinazione ancora più libera |
 | **⌨ Un tasto a tua scelta + clic** | vedi sotto |
-| **Sempre** | ogni clic su un segmento lo mette in lista |
-| **Spenta** | nessuna cattura al clic |
+| **Spenta** | nessuna cattura al clic: usi solo *Aggiungi selezione attuale* |
 
 MAIUSC e CTRL **da soli** non sono selezionabili di proposito: il WME li usa per la multi-selezione.
 Se l'SDK lo consente, la scorciatoia **A + C** cicla al volo fra le modalità.
@@ -166,6 +165,8 @@ I segmenti catturati compaiono come **chip** sotto il menu:
 - clic sul chip → lo seleziona nell'editor;
 - clic sulla **×** (o ri-clic sul segmento con il modificatore) → lo toglie dalla lista;
 - **chip rosso** → su quel segmento l'ultimo *Applica* è fallito;
+- **Aggiungi selezione attuale** → mette in lista i segmenti selezionati nell'editor. Comodo dopo una
+  multi-selezione o dopo aver cliccato una via nel [tracciato dell'agro](#10--traccia-le-vie-dellagro);
 - **Svuota lista** → azzera tutto (risultati e civici sulla mappa si riallineano da soli).
 
 ### Le altre opzioni
@@ -494,63 +495,67 @@ Al termine arriva un riepilogo con inseriti, saltati e motivi dei rifiuti. **Poi
 
 ---
 
-## 10 · Controlla la zona
+## 10 · Traccia le vie dell'agro
 
-Il bottone **🗺️ Controlla la zona** dice da dove cominciare in un quartiere. Confronta le strade
-visibili a schermo con ANNCSU e le colora, **senza modificare niente**: non tocca nomi, non inserisce
-civici, non lascia modifiche da salvare.
+Nelle campagne il problema non è scrivere il nome: è **capire quale via è quale**. Le strade sono
+lunghe, si incrociano, spesso non hanno nome sulla mappa, e i cartelli non ci sono. Questo bottone
+risponde a quella domanda, e solo a quella: **i civici non si vedono e non si inseriscono da qui**, si
+lavorano come sempre catturando i segmenti.
 
-I colori funzionano come un semaforo, dal peggio al meglio. Le strade colorate sono **piene**; il
-**tratteggio** che vedi è un'altra cosa: sono i segmenti che hai in lista, nel colore scelto in
-*Evidenzia*, e non fanno parte del controllo (la scheda te lo ricorda).
+> **Serve fuori dai centri abitati.** In paese le vie sono corte, fitte e quasi sempre già a nome: lì
+> non aggiunge niente, e con la vista larga si superano subito le **500 strade** del limite. Se lo apri
+> in centro abitato, la scheda te lo dice.
 
-| Colore | Cosa vuol dire |
+Premendolo, lo script prende i civici ANNCSU a schermo, assegna ogni civico al segmento più vicino
+(fino a 25 m) e traccia **solo i segmenti che su Waze non hanno nome**, colorandoli secondo la via a cui
+appartengono. Le strade già a nome non vengono colorate: quelle non sono lavoro da fare. È in **sola
+lettura**: finché non sei tu a chiederlo, non cambia niente sulla mappa.
+
+### Come si usa
+
+**1. Accendi le vie che ti interessano.** All'apertura la mappa resta pulita: nell'elenco, accanto a
+ogni via, c'è un **quadratino colorato** che accende o spegne il suo tracciato. Un clic sul quadratino
+colora solo quella; un clic sulla **riga** la colora, ci porta sopra la mappa e ne seleziona i segmenti
+nell'editor. Sopra l'elenco, *tutte* e *nessuna* per fare in blocco.
+
+Il tracciato acceso mostra il percorso con il nome scritto sopra: così vedi dove comincia e dove
+finisce e capisci se è davvero la via che pensavi. **Il colore di una via non cambia** quando sposti la
+mappa: è legato alla via, non alla posizione nell'elenco.
+
+**2. Se il nome è giusto, premi Applica.** Scrive quel nome sui segmenti **senza nome** di quella via
+(quelli che un nome ce l'hanno non vengono toccati), tutti in un colpo,
+con le regole di *Applica come*: dentro il centro abitato il nome principale con la città, fuori il
+nome principale senza città più l'alternativo con la città. Prima di scrivere ti chiede conferma, e
+vale tutto quello che vale per il bottone *Applica ai segmenti*: verifica segmento per segmento,
+rampe escluse, alternativi rispettati.
+
+**3. I civici li fai dopo, come sempre.** Una volta che la via ha il nome, catturi i segmenti con
+ALT + clic e usi l'elenco di controllo: è lì che i civici si vedono, si scelgono e si inseriscono.
+
+Ogni riga dice **quale contrada è** secondo ANNCSU, quanti segmenti restano da nominare e su quanti
+civici si basa la conclusione. Se altri tronconi della stessa via hanno già un nome, lo trovi in coda
+alla riga: è l'indizio più forte per capire di che contrada si tratta.
+
+| In coda alla riga | Significato |
 |---|---|
-| 🔴 **rosso** | strada **senza nome**: qui manca tutto, si parte da zero |
-| 🟡 **giallo** | il nome su Waze è **diverso** da ANNCSU: c'è qualcosa da verificare prima di toccare |
-| 🟢 **verde** | nome a posto, **mancano solo i civici** (almeno 5): si può lavorare subito |
+| **✓ N già a nome** | altri tronconi si chiamano già come dice ANNCSU: puoi procedere tranquillo |
+| **≠ N già a nome** | altri tronconi hanno un nome **diverso** da ANNCSU: controlla quale dei due è giusto prima di applicare |
+| nessuna coda | nessun troncone con nome nei dintorni: fidati dei civici, ma verifica sul posto |
 
-Le strade **già fatte non compaiono**: se il nome coincide e su Waze ci sono gli stessi civici di ANNCSU,
-non c'è niente da segnalare. In fondo alla scheda trovi comunque quante ne ha trovate a posto, così sai
-che il controllo le ha guardate. Il confronto è sui **numeri**, non sulle quantità: una via con otto
-civici diversi da quelli ANNCSU risulta da lavorare, non a posto.
+Più civici ci sono, più la conclusione è solida: una via con quaranta civici è quasi certa, una con tre
+è un indizio.
 
-È una **modalità di sola lettura**: mostra sulla mappa quello che c'è in banca dati e lo colora. Oltre
-alle strade colorate compaiono i **civici ANNCSU** con il numero, così vedi subito dove puntare; per le
-vie verdi sono i civici che su Waze ancora non ci sono.
+La spunta **"nascondi le strade che non posso modificare"** tiene fuori quelle bloccate sopra il tuo
+livello.
 
-> **Serve soprattutto nelle zone agro e nelle contrade**, dove le strade sono poche, lunghe e spesso
-> senza nome: lì una vista larga ti fa capire in un colpo d'occhio da dove cominciare. In centro abitato
-> rende molto meno, perché con la vista larga si superano subito le **500 strade** del limite e la
-> scheda diventa un elenco infinito. Quel limite non è un difetto: su Waze si lavora **di precisione**,
-> un tratto per volta, e il controllo serve a scegliere dove andare, non a sostituire il lavoro fatto
-> segmento per segmento.
+Quando in una vista non resta niente da nominare, la scheda te lo dice e puoi passare oltre.
 
-Sotto il bottone compare l'elenco di quello che ha trovato, diviso per colore: un clic su una riga
-centra la mappa su quella strada e la seleziona nell'editor, pronta da lavorare.
+**Come si comporta:** all'accensione si porta da solo allo **zoom 16** e poi ti segue mentre giri la
+mappa; non usa il **Raggio** del pannello, che vale solo quando scegli tu i segmenti; le vie tracciate
+sono a tratto pieno, mentre il **tratteggio** sono i segmenti che hai in lista.
 
-Finché il controllo è acceso **segue la mappa**: sposti la vista, ti fermi, e il controllo si rifà da
-solo sulla zona nuova. Con lo stesso bottone (*Togli i colori*) si spegne tutto.
-
-**Come leggerlo bene:**
-
-- all'accensione lo script **si porta da solo allo zoom 16**, abbastanza largo da capire dove cominciare:
-  da lì giri la mappa e il controllo ti segue. Se dopo ti allontani, i colori spariscono e la scheda ti
-  dice di riavvicinarti;
-- la spunta **"nascondi le strade che non posso modificare"** tiene fuori le strade bloccate a un
-  livello superiore al tuo: vedi solo il lavoro che puoi fare davvero. Togliendola ricompaiono, con il
-  lucchetto 🔒 accanto al nome. La scelta resta salvata;
-- la vista non deve contenere più di 500 strade: se sono troppe lo script te lo dice invece di macinare
-  mezza città;
-- **non usa il Raggio del pannello**: quello vale quando scegli tu i segmenti. Qui ogni civico ANNCSU a
-  schermo viene assegnato alla strada più vicina (fino a 25 m), una volta sola, quindi due vie parallele
-  non si contendono gli stessi numeri;
-- i **civici mancanti** si contano su quelli che l'editor ha già caricato, e il WME li carica solo da
-  vicino. Dove non li ha ancora, lo script non segnala niente per quelle strade (nessun falso allarme) e
-  scrive quante non ha potuto valutare: avvicinati un altro po' e il controllo si rifà da solo. Il rosso
-  e il giallo invece valgono sempre;
-- una segnalazione **non è un errore certo**: ANNCSU può avere un odonimo diverso da quello sui
-  cartelli. Controlla sempre prima di cambiare.
+> Quello che vedi è **ANNCSU, non il vangelo**: un odonimo può essere diverso da quello sui cartelli e
+> qualche civico può essere fuori posto. Il tracciato ti dice dove guardare, la decisione resta tua.
 
 ---
 
