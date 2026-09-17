@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.3.1
+// @version      0.3.2
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       Francesco Conforti (checcoconf)
 // @copyright    2026 Francesco Conforti
@@ -170,6 +170,8 @@
     let busy = false;
     let authInfo = { ok: false, user: '', reason: '', code: 401 };
     let panelEl = null;
+    let tabLabelEl = null;            // linguetta "Fonti IT" nella sezione Script del WME
+    let tabPaneEl = null;             // contenitore della nostra scheda
     let batchRunning = false;         // ciclo su piu' regioni in corso
     let abortBatch = false;           // richiesta di fermarsi dopo la regione in corso
 
@@ -208,7 +210,8 @@
 
     const DEFAULT_SETTINGS = {
         raggio: 10, titleCase: true, captureMode: 'alt', applyMode: 'extra', zonaSoloMie: true,
-        autoAnalyze: true, showDots: true, dotSize: 'normale', hlColor: '#00e5ff', captureKey: null
+        autoAnalyze: true, showDots: true, dotSize: 'normale', hlColor: '#00e5ff', captureKey: null,
+        apriRisultati: true
     };
 
     // Riporta al formato attuale le impostazioni salvate dalle versioni precedenti e
@@ -237,6 +240,9 @@
         // piu' largo gonfiava solo i risultati. I valori salvati piu' grandi scendono a 50.
         s.raggio = Math.min(RAGGIO_MAX, Math.max(1, parseInt(s.raggio, 10) || DEFAULT_SETTINGS.raggio));
         s.zonaSoloMie = s.zonaSoloMie !== false;
+        // Dalla 0.3.2: dopo la cattura col tasto il pannello si apre da solo sui Risultati.
+        // Acceso per tutti, anche per chi aggiorna; si spegne dalla spunta "Apri i risultati".
+        s.apriRisultati = s.apriRisultati !== false;
         // Dimensione dei pallini sulla mappa: se il valore salvato non esiste piu', si torna a 'normale'
         if (!DOT_SIZES[s.dotSize]) s.dotSize = 'normale';
         return s;
@@ -403,7 +409,8 @@
         ['Events.trackLayerEvents', 'clic sui pallini', false],
         ['Events.stopLayerEventsTracking', 'clic sui pallini solo a elenco aperto', false],
         ['StreetView.open', 'bottone Street View', false],
-        ['Shortcuts.createShortcut', 'scorciatoia da tastiera', false]
+        ['Shortcuts.createShortcut', 'scorciatoia da tastiera', false],
+        ['Map.getMapViewportElement', 'apertura dei Risultati (clic sulla mappa)', false]
     ];
     let sdkMancanti = [];
 
@@ -861,6 +868,7 @@
         initData();
         try { sdk.Events.on({ eventName: 'wme-selection-changed', eventHandler: onSelectionChanged }); }
         catch (e) { log('evento selezione KO', e); }
+        hookSidebarEvents();
         registerShortcut();
         initSaveTracking();
         loadCache();
@@ -1243,6 +1251,7 @@
   </div>
   <div class="wfit-row">
     <label><input type="checkbox" id="wfit-autoan"> Auto-analisi</label>
+    <label title="Dopo ogni cattura con il tasto (ALT + clic, o la combinazione che hai scelto) la barra laterale passa da sola a Script &rarr; Fonti IT e scorre fino ai Risultati, dove vedi nomi e civici dei segmenti in lista. Spegnila se preferisci restare sulla sezione in cui stai lavorando."><input type="checkbox" id="wfit-apri"> Apri i risultati</label>
     <label><input type="checkbox" id="wfit-dots"> Civici sulla mappa</label>
   </div>
   <div class="wfit-row" id="wfit-dotsizerow" title="Quanto grandi disegnare i pallini dei civici e i loro numeri sulla mappa. Serve solo a vederci meglio: non cambia nulla di quello che finisce su Waze.">
@@ -1272,7 +1281,7 @@
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
     <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia solo una parte &egrave; ancora geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). Sotto <b>Altre opzioni dati</b>, <b>Scarica tutte</b> le prende una dopo l'altra (alcuni minuti: te lo chiede prima di partire), mentre <b>Aggiorna</b> riscarica quelle che hai gi&agrave; in locale (e si accende di verde quando i tuoi dati hanno passato i 35 giorni); in tutti e due i casi il bottone diventa <b>Ferma</b> e il ciclo si interrompe dopo la regione in corso. <b>Svuota dati</b> riparte da zero. I dati ANNCSU sono <b>open data</b> rilasciati con licenza ${licLink('Creative Commons Attribuzione 4.0 (CC-BY 4.0)')}: si possono riutilizzare anche su Waze, purch&eacute; sia citata la fonte.</p>
-    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell&#39;editor. Dal menu <b>Cattura</b> puoi passare ad <b>ALT + MAIUSC</b>, <b>CTRL/&#8984; + ALT</b> o a un tasto a tua scelta (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione). Se preferisci selezionare nell&#39;editor e basta, usa <b>Aggiungi selezione attuale</b>: mette in lista tutto quello che hai selezionato, anche dopo una multi-selezione o un clic nel tracciato dell&#39;agro. I chip rossi indicano i segmenti dove l&#39;ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell&#39;editor. Dal menu <b>Cattura</b> puoi passare ad <b>ALT + MAIUSC</b>, <b>CTRL/&#8984; + ALT</b> o a un tasto a tua scelta (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione). Dopo ogni cattura, da qualunque sezione tu sia (Revisiona, Eventi, un altro script&hellip;), la barra laterale si porta da sola su <b>Script &rarr; Fonti IT</b> e scende fino ai <b>Risultati</b>: se sei gi&agrave; su Fonti IT scende ai Risultati solo se non li hai gi&agrave; davanti, altrimenti resta ferma, con nomi e civici dei segmenti in lista (se preferisci restare dove sei, togli la spunta <b>Apri i risultati</b>). Se preferisci selezionare nell&#39;editor e basta, usa <b>Aggiungi selezione attuale</b>: mette in lista tutto quello che hai selezionato, anche dopo una multi-selezione o un clic nel tracciato dell&#39;agro. I chip rossi indicano i segmenti dove l&#39;ultimo Applica &egrave; fallito.</p>
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
@@ -1312,6 +1321,7 @@
                 raggio: p.querySelector('#wfit-raggio'),
                 titlecase: p.querySelector('#wfit-titlecase'),
                 autoan: p.querySelector('#wfit-autoan'),
+                apri: p.querySelector('#wfit-apri'),
                 dots: p.querySelector('#wfit-dots'),
                 dotsize: p.querySelector('#wfit-dotsize'),
                 dotsizerow: p.querySelector('#wfit-dotsizerow'),
@@ -1332,6 +1342,7 @@
         ui.hlcolor.value = settings.hlColor;
         if (ui.hlcolor.value !== settings.hlColor) { settings.hlColor = '#00e5ff'; ui.hlcolor.value = settings.hlColor; }
         ui.autoan.checked = settings.autoAnalyze;
+        ui.apri.checked = settings.apriRisultati;
         ui.dots.checked = settings.showDots;
         ui.dotsize.value = settings.dotSize;
         if (!ui.dotsize.value) { settings.dotSize = 'normale'; ui.dotsize.value = 'normale'; }
@@ -1375,6 +1386,7 @@
         updateKeyRow();
         ui.hlcolor.addEventListener('change', () => { settings.hlColor = ui.hlcolor.value; saveSettings(); refreshMapLayer(); });
         ui.autoan.addEventListener('change', () => { settings.autoAnalyze = ui.autoan.checked; saveSettings(); });
+        ui.apri.addEventListener('change', () => { settings.apriRisultati = ui.apri.checked; saveSettings(); });
         ui.dots.addEventListener('change', () => {
             settings.showDots = ui.dots.checked; saveSettings();
             ui.dotsizerow.style.display = settings.showDots ? '' : 'none';
@@ -1418,6 +1430,8 @@
         const { tabLabel, tabPane } = await sdk.Sidebar.registerScriptTab();
         tabLabel.innerHTML = `${LOGO_SVG} <span>Fonti IT</span>`;
         tabLabel.title = SCRIPT_NAME;
+        tabLabelEl = tabLabel;
+        tabPaneEl = tabPane;
 
         const style = document.createElement('style');
         style.textContent = CSS;
@@ -2316,7 +2330,12 @@
             : (MODE_MODS[mode] ? modsMatch(MODE_MODS[mode], lastMouse) : false);
         if (!(fresh && key)) return;
         captureIds(ids, true);
-        setTimeout(clearWmeSelection, 50);
+        // prima si chiude il pannello del segmento, poi si passa ai Risultati: al contrario
+        // il WME, deselezionando, potrebbe riportarti dove eri
+        setTimeout(async () => {
+            await clearWmeSelection();
+            revealResults();
+        }, 50);
     }
 
     function captureIds(ids, toggle) {
@@ -2334,8 +2353,436 @@
         // dopo un'aggiunta decide l'Auto-analisi
         if (mem.n && (removed || (added && settings.autoAnalyze))) {
             clearTimeout(analyzeTimer);
-            analyzeTimer = setTimeout(analyze, 250);
+            analisiInArrivo = true;
+            analyzeTimer = setTimeout(() => {
+                analisiInArrivo = false;
+                try { analyze(); } finally { scrollAfterAnalyze(); }
+            }, 250);
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Dopo la cattura: pannello aperto sui Risultati                      */
+    /* ------------------------------------------------------------------ */
+
+    // L'SDK crea la scheda dello script ma non ha un comando per aprirla. Qui si fa quello che
+    // faresti tu col mouse, da qualunque sezione tu sia (Revisiona, Eventi, Preferenze...): un clic
+    // sulla voce "Script" della barra laterale e uno sulla linguetta "Fonti IT", poi si scende ai
+    // Risultati. Nessun oggetto interno del WME. Tre appoggi, dal piu' solido:
+    //  - l'evento ufficiale wme-sidebar-tab-opened dice quale sezione e' aperta davvero;
+    //  - la voce "Script" viene IMPARATA la prima volta che la clicchi tu (e ricordata);
+    //  - la visibilita' si verifica in primo piano: nel WME 2026 le sezioni chiuse possono restare
+    //    "presenti" per il browser (fuori schermo o sotto quella aperta) e sembrare aperte.
+    // Se qualcosa non va a segno la cattura funziona lo stesso e wfitDiag() dice cosa manca.
+    let revealToken = 0;          // una nuova cattura annulla l'apertura precedente ancora in corso
+    let revealAt = 0;             // quando e' stata chiesta l'ultima apertura (serve al secondo scroll)
+    let ourNavClickAt = 0;        // ultimo clic NOSTRO sulla voce Script: non si impara da quello
+    let revealEsito = '(nessuna cattura ancora)';   // per wfitDiag
+    let revealKick = null;        // giro in corso, da far ripartire subito quando il WME cambia sezione
+    let navCache = null;          // voce "Script" gia' trovata
+    let navLearned = null;        // { item, target } dal tuo ultimo clic su Script
+    let navWayOk = -1;            // il modo di cliccare che ha funzionato: si riusa per primo
+    let userNavAt = 0;            // ultimo clic TUO sulla barra laterale: da li' in poi decidi tu
+    let lastUserPress = { path: [], t: 0 };
+    // Com'era la barra quando hai cliccato sulla mappa: se eri gia' su Fonti IT non si muove nulla
+    let pressSnap = { t: 0, onPane: false, box: null, top: 0, risultati: false };
+    let fermoSnap = null;         // ultima foto "eri su Fonti IT", per le catture a raffica
+    let analisiInArrivo = false;  // il confronto partira' fra un attimo: si scorre dopo, una volta sola
+    let scrollDovuto = false;
+    let sidebarTab = '';          // sezione aperta secondo il WME ('' = evento non ancora visto)
+    let sidebarTabAt = 0;
+    let sidebarEventOk = false;
+    const NAV_KEY = 'wfit-nav-script';
+    const SCRIPT_TAB_RX = /userscript|script/i;
+    const REVEAL_MS = 2500;       // per quanto si controlla che il WME, chiudendo il segmento, non ci riporti altrove
+    const REVEAL_PASSO = 120;     // ogni quanto si ricontrolla
+    const NAV_CLICK_MAX = 4;      // clic massimi sulla voce Script per ogni tentativo
+    const NAV_SEL = 'wz-navigation-item, [data-for], [role="tab"], [role="menuitem"], [role="button"], [role="link"], button, a, li';
+
+    const upNode = n => n.parentElement || (n.getRootNode && n.getRootNode().host) || null;
+    const composedContains = (a, b) => { for (let n = b; n; n = upNode(n)) if (n === a) return true; return false; };
+    const attr = (n, k) => (n && n.getAttribute && n.getAttribute(k)) || '';
+    const norm = t => String(t || '').toLowerCase().replace(/sidepanel|^#/g, '').replace(/[^a-z0-9]/g, '');
+    const inScriptTab = () => (sidebarTab ? SCRIPT_TAB_RX.test(sidebarTab) : null);   // true / false / non si sa
+
+    // Elemento davvero sotto il punto, anche dentro i componenti del WME (shadow DOM)
+    function deepHit(x, y) {
+        let h = document.elementFromPoint(x, y);
+        for (let i = 0; h && h.shadowRoot && i < 10; i++) {
+            const inner = h.shadowRoot.elementFromPoint ? h.shadowRoot.elementFromPoint(x, y) : null;
+            if (!inner || inner === h) break;
+            h = inner;
+        }
+        return h;
+    }
+
+    // Visibile DAVVERO: dentro lo schermo, non nascosto e in primo piano (non coperto da
+    // un'altra sezione della barra).
+    function isOnScreen(el) {
+        if (!el || !el.isConnected || !el.getClientRects().length) return false;
+        const r = el.getBoundingClientRect();
+        const vw = window.innerWidth || document.documentElement.clientWidth;
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+        const x1 = Math.max(0, r.left), x2 = Math.min(vw, r.right);
+        const y1 = Math.max(0, r.top), y2 = Math.min(vh, r.bottom);
+        if (x2 - x1 < 2 || y2 - y1 < 2) return false;
+        for (let p = el; p && p.nodeType === 1; p = upNode(p)) {
+            const cs = getComputedStyle(p);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse' || parseFloat(cs.opacity) === 0) return false;
+        }
+        if (typeof document.elementFromPoint !== 'function') return true;
+        let letti = 0;
+        const dentro = [[0.5, 0.5], [0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75], [0.5, 0.1]].some(([fx, fy]) => {
+            const h = deepHit(x1 + (x2 - x1) * fx, y1 + (y2 - y1) * fy);
+            if (h) letti++;
+            return h && composedContains(el, h);
+        });
+        return dentro || letti === 0;   // se il browser non risponde, ci si fida delle misure
+    }
+
+    // querySelectorAll che entra anche nei componenti del WME (shadow DOM)
+    function deepAll(root, sel, out = []) {
+        if (!root) return out;
+        root.querySelectorAll(sel).forEach(n => out.push(n));
+        root.querySelectorAll('*').forEach(n => { if (n.shadowRoot) deepAll(n.shadowRoot, sel, out); });
+        return out;
+    }
+
+    // Testo della voce: attributi, testo normale e testo dentro il componente (senza i fogli di stile)
+    function navLabel(n) {
+        let shadow = '';
+        if (n.shadowRoot) {
+            n.shadowRoot.querySelectorAll('*').forEach(c => {
+                if (c.tagName !== 'STYLE' && c.tagName !== 'SCRIPT' && !c.children.length) shadow += ' ' + c.textContent;
+            });
+        }
+        return [attr(n, 'label'), attr(n, 'aria-label'), attr(n, 'title'), attr(n, 'tooltip'), attr(n, 'tooltip-text'),
+            n.textContent, shadow].join(' ').replace(/\s+/g, ' ').trim();
+    }
+    const NAV_TXT = /^(script|scripts|skript|skripte|skrypty|scripturi)$/i;
+    const NAV_ATTRS = ['data-for', 'icon', 'id', 'role', 'aria-label', 'name', 'value', 'href', 'data-tab', 'aria-controls'];
+    function navDesc(n) {
+        if (!n) return 'nessuna';
+        const bits = NAV_ATTRS.map(k => attr(n, k) ? `${k}="${attr(n, k)}"` : '').filter(Boolean);
+        return `<${n.tagName.toLowerCase()}${bits.length ? ' ' + bits.join(' ') : ''}> "${navLabel(n).slice(0, 30)}"`;
+    }
+
+    // Il contenitore della sezione Script: il primo antenato comune a linguetta e pannello
+    function scriptBox() {
+        for (let p = tabLabelEl && upNode(tabLabelEl); p; p = upNode(p)) if (composedContains(p, tabPaneEl)) return p;
+        return null;
+    }
+    function mapViewport() {
+        try { return sdk.Map.getMapViewportElement(); } catch { return null; }
+    }
+
+    // --- La voce Script imparata dal tuo clic -------------------------------------------------
+    // Quando apri tu la sezione Script, il WME lo annuncia con wme-sidebar-tab-opened: l'elemento
+    // che avevi appena premuto E' la voce giusta, qualunque forma abbia. La si ricorda anche per
+    // le sessioni successive (tag, attributi e testo, nient'altro).
+    function learnNav(path) {
+        if (ourNavClickAt >= lastUserPress.t) return;   // la sezione l'abbiamo aperta noi, non tu
+        const els = path.filter(n => n && n.nodeType === 1 && n !== document.body && n !== document.documentElement);
+        if (!els.length) return;
+        const mapEl = mapViewport();
+        if (mapEl && els.some(n => n === mapEl)) return;
+        const box = scriptBox();
+        let item = els.find(n => n.matches && n.matches(NAV_SEL));
+        if (!item) {
+            item = els.slice().reverse().find(n => {
+                const r = n.getBoundingClientRect();
+                return r.width > 0 && r.width < 320 && r.height > 0 && r.height < 140;
+            });
+        }
+        if (!item || (box && composedContains(box, item))) return;   // clic dentro la sezione, non sulla voce
+        navLearned = { item, target: els[0] };
+        navCache = item;
+        let rootId = '';
+        for (let p = upNode(item); p; p = upNode(p)) if (p.id) { rootId = p.id; break; }
+        const attrs = {};
+        NAV_ATTRS.forEach(k => { if (attr(item, k)) attrs[k] = attr(item, k); });
+        const tag = item.tagName.toLowerCase();
+        const fratelli = deepAll((rootId && document.getElementById(rootId)) || document.body, tag);
+        try { localStorage.setItem(NAV_KEY, JSON.stringify({ tag, attrs, label: navLabel(item).slice(0, 40), rootId, idx: fratelli.indexOf(item), n: fratelli.length })); }
+        catch { /* pazienza: vale per questa sessione */ }
+        log('voce Script imparata dal tuo clic:', navDesc(item));
+    }
+    function navFromMemory() {
+        let d = null;
+        try { d = JSON.parse(localStorage.getItem(NAV_KEY) || 'null'); } catch { return null; }
+        if (!d || !d.tag) return null;
+        const root = (d.rootId && document.getElementById(d.rootId)) || document.getElementById('drawer') || document.body;
+        const all = deepAll(root, d.tag);
+        const keys = Object.keys(d.attrs || {}).filter(k => k !== 'id' || !/\d{3,}/.test(d.attrs[k]));   // niente id generati a caso
+        return (keys.length && all.find(n => keys.every(k => attr(n, k) === d.attrs[k])))
+            || (d.label && all.find(n => navLabel(n).slice(0, 40) === d.label))
+            // voce senza nome ne' attributi (solo icona): vale la posizione, se la barra non e' cambiata
+            || (d.idx >= 0 && d.n === all.length && d.rootId && all[d.idx])
+            || null;
+    }
+
+    // La voce "Script" della barra laterale (icona </>): prima quella imparata, poi quella
+    // ricordata, poi quattro ricerche dalla piu' sicura alla piu' generica.
+    function scriptsNavItem() {
+        if (navLearned && navLearned.item.isConnected) return navLearned.item;
+        if (navCache && navCache.isConnected) return navCache;
+        const mem = navFromMemory();
+        if (mem) { navCache = mem; return mem; }
+        const root = document.getElementById('drawer') || document.body;
+        const box = scriptBox();
+        const inPanel = n => (box && composedContains(box, n)) || (tabPaneEl && composedContains(n, tabPaneEl))
+            || (tabLabelEl && (composedContains(n, tabLabelEl) || composedContains(tabLabelEl, n)));
+        let items = deepAll(root, NAV_SEL).filter(n => !inPanel(n));
+        items = items.filter(n => !items.some(m => m !== n && n.contains(m) && m.tagName === n.tagName));
+        // id delle sezioni che contengono la nostra linguetta (es. la sezione Script)
+        const ids = [];
+        for (let p = tabLabelEl && upNode(tabLabelEl); p && p !== document.body; p = upNode(p)) if (p.id) ids.push(norm(p.id));
+        const refs = n => ['data-for', 'href', 'aria-controls', 'data-target', 'data-tab', 'for'].map(k => norm(attr(n, k))).filter(Boolean);
+        const pick = items.find(n => refs(n).some(r => ids.some(id => id === r || (r.length > 5 && id.includes(r)) || (id.length > 5 && r.includes(id)))))
+            || items.find(n => /script/i.test(attr(n, 'data-for') + ' ' + attr(n, 'data-tab')))
+            || items.find(n => /script|code/i.test(attr(n, 'icon')))
+            || items.find(n => NAV_TXT.test(navLabel(n)))
+            || items.find(n => /\bscripts?\b/i.test(navLabel(n)) && navLabel(n).length < 20)
+            || navFromIcon(root, inPanel)
+            || null;
+        navCache = pick;
+        return pick;
+    }
+    // Voce fatta solo di un'icona </>: si risale dall'icona al primo contenitore cliccabile
+    function navFromIcon(root, inPanel) {
+        const icons = deepAll(root, '[class*="icon-script"], [class*="icon-code"], [class*="script-icon"], [class*="code-icon"], [icon*="script"], [icon*="code"]');
+        for (const ic of icons) {
+            if (inPanel(ic)) continue;
+            for (let p = ic; p && p !== root; p = upNode(p)) {
+                if (p.matches && p.matches(NAV_SEL)) return p;
+                const r = p.getBoundingClientRect();
+                const up = upNode(p);
+                const ru = up && up.getBoundingClientRect();
+                // il contenitore piu' grande che resta "una voce" (non tutta la colonna)
+                if (r.width > 0 && r.height < 140 && (!ru || ru.height >= 140 || up === root)) return p;
+            }
+        }
+        return null;
+    }
+    const isNavActive = n => ['selected', 'active', 'checked'].some(k => n.hasAttribute(k) && attr(n, k) !== 'false')
+        || attr(n, 'aria-selected') === 'true' || attr(n, 'aria-current') === 'page'
+        || n.classList.contains('selected') || n.classList.contains('active');
+
+    // Un clic "vero": alcuni componenti ascoltano i pointer event o solo il pulsante interno.
+    // Ogni tentativo usa un modo diverso, e fra un tentativo e l'altro si controlla se ha funzionato.
+    function pointerSequence(n) {
+        const r = n.getBoundingClientRect();
+        const o = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+        const P = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+        n.dispatchEvent(new P('pointerdown', Object.assign({ pointerId: 1, isPrimary: true, pointerType: 'mouse' }, o)));
+        n.dispatchEvent(new MouseEvent('mousedown', o));
+        n.dispatchEvent(new P('pointerup', Object.assign({ pointerId: 1, isPrimary: true, pointerType: 'mouse' }, o, { buttons: 0 })));
+        n.dispatchEvent(new MouseEvent('mouseup', Object.assign({}, o, { buttons: 0 })));
+        n.dispatchEvent(new MouseEvent('click', Object.assign({}, o, { buttons: 0 })));
+    }
+    const learnedTarget = n => (navLearned && navLearned.item === n && navLearned.target.isConnected) ? navLearned.target : null;
+    const NAV_CLICK_WAYS = [
+        ['clic', n => (learnedTarget(n) || n).click()],
+        ['clic interno', n => {
+            const inner = n.shadowRoot && n.shadowRoot.querySelector('button, a, [role="button"], [role="tab"], [part], div');
+            (inner || n).click();
+        }],
+        ['sequenza puntatore', n => pointerSequence(learnedTarget(n) || n)],
+        ['clic', n => n.click()]
+    ];
+
+    // Dove cliccare per attivare la nostra linguetta fra quelle degli altri script
+    function ownTabClickTarget() {
+        if (!tabLabelEl) return null;
+        const sel = 'a, [data-toggle="tab"], [data-bs-toggle="tab"], [role="tab"], wz-tab';
+        const up = tabLabelEl.closest(sel);
+        if (up && !up.contains(tabPaneEl)) return up;
+        return tabLabelEl.querySelector(sel) || tabLabelEl;
+    }
+
+    // Primo contenitore che scorre davvero sopra l'elemento. Si scorre solo quello: scrollIntoView
+    // muoverebbe anche i contenitori del WME che non devono spostarsi.
+    function scrollParentOf(el) {
+        for (let p = upNode(el); p && p !== document.body && p !== document.documentElement; p = upNode(p)) {
+            if (/(auto|scroll|overlay)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight + 1) return p;
+        }
+        return null;
+    }
+
+    // I Risultati sono gia' davanti agli occhi? Si': iniziano nella parte alta della barra (o piu'
+    // su, se stai scorrendo l'elenco dei civici) e se ne vede ancora un bel pezzo.
+    function risultatiAVista(box) {
+        const t = ui.results && (ui.results.closest('.wfit-sec') || ui.results);
+        if (!t || !box || !t.isConnected) return false;
+        const r = t.getBoundingClientRect(), b = box.getBoundingClientRect();
+        return r.top <= b.top + b.height * 0.4 && r.bottom >= b.top + 80;
+    }
+    // Com'e' messa la barra adesso: Fonti IT a vista? dove e' scorsa? i Risultati si vedono?
+    function fotoBarra() {
+        const onPane = isOnScreen(tabPaneEl);
+        const box = onPane ? scrollParentOf(tabPaneEl) : null;
+        return { t: Date.now(), onPane, box, top: box ? box.scrollTop : 0, risultati: onPane && (!box || risultatiAVista(box)) };
+    }
+
+    function scrollToResults() {
+        const target = ui.results && (ui.results.closest('.wfit-sec') || ui.results);
+        if (!target || !target.isConnected) return;
+        const box = scrollParentOf(target);
+        if (!box) return;   // il pannello sta tutto a vista: niente da scorrere
+        const top = Math.max(0, Math.round(box.scrollTop + target.getBoundingClientRect().top - box.getBoundingClientRect().top - 6));
+        // un salto secco e basta: lo scorrimento animato a ogni cattura faceva l'effetto tendina
+        if (Math.abs(box.scrollTop - top) > 4) box.scrollTop = top;
+    }
+
+    // Il WME annuncia ogni cambio di sezione: si tiene nota di quella aperta e, se l'hai aperta
+    // tu cliccando Script, si impara quale era la voce.
+    function onSidebarTabOpened(ev) {
+        const name = String((ev && (ev.tabName || ev.name || ev.tab)) || '');
+        if (!name) return;
+        sidebarTab = name;
+        sidebarTabAt = Date.now();
+        if (SCRIPT_TAB_RX.test(name) && Date.now() - lastUserPress.t < 1500) learnNav(lastUserPress.path);
+        if (revealKick) setTimeout(revealKick, 40);   // si riparte subito, senza aspettare il giro
+    }
+    function hookSidebarEvents() {
+        try { sdk.Events.on({ eventName: 'wme-sidebar-tab-opened', eventHandler: onSidebarTabOpened }); sidebarEventOk = true; }
+        catch (e) { log('evento wme-sidebar-tab-opened non disponibile: si va a vista', e); }
+    }
+
+    // I tuoi clic: servono a imparare la voce Script e a fermare la sorveglianza quando scegli tu
+    function isSidebarPath(path) {
+        const box = scriptBox();
+        return path.some(n => n && n.nodeType === 1 && (
+            n === tabPaneEl || n === tabLabelEl || n === navCache || n === box
+            || /^(drawer|sidebar|sidebarContent|user-tabs|user-info)$/.test(n.id || '')
+            || /^WZ-NAVIGATION/.test(n.tagName)));
+    }
+    const onUserPress = e => {
+        if (!e.isTrusted) return;
+        const path = e.composedPath ? e.composedPath() : [e.target];
+        if (e.type === 'pointerdown' || Date.now() - lastUserPress.t > 800) lastUserPress = { path, t: Date.now() };
+        const suBarra = isSidebarPath(path) || (pressSnap.box && path.includes(pressSnap.box));
+        if (revealToken && suBarra) userNavAt = Date.now();
+        if (suBarra) fermoSnap = null;   // stai cambiando sezione tu: la foto di prima non vale piu'
+        // Clic fuori dalla barra (sulla mappa, prima che il WME apra il pannello del segmento):
+        // si fotografa se Fonti IT e' a vista e dove era scorsa la barra
+        if (e.type === 'pointerdown' && !suBarra && tabPaneEl) {
+            pressSnap = fotoBarra();
+            // catture a raffica: il WME puo' mostrare ancora il pannello del segmento precedente,
+            // ma eri su Fonti IT fino a un attimo fa: vale la foto di prima
+            if (pressSnap.onPane) fermoSnap = Object.assign({}, pressSnap);
+            else if (fermoSnap && Date.now() - fermoSnap.t < 1500) pressSnap = Object.assign({}, fermoSnap, { t: Date.now() });
+        }
+    };
+    document.addEventListener('pointerdown', onUserPress, true);
+    document.addEventListener('click', onUserPress, true);
+    // anche la rotellina sulla barra vuol dire "decido io": niente piu' scorrimenti automatici
+    document.addEventListener('wheel', e => {
+        if (!e.isTrusted || !revealToken) return;
+        const path = e.composedPath ? e.composedPath() : [e.target];
+        if (isSidebarPath(path) || (pressSnap.box && path.includes(pressSnap.box))) userNavAt = Date.now();
+    }, { capture: true, passive: true });
+
+    function revealResults(forza) {
+        if ((!settings.apriRisultati && !forza) || !tabLabelEl || !tabPaneEl) return;
+        const token = ++revealToken;
+        const start = Date.now();
+        // Eri gia' su Fonti IT quando hai cliccato il segmento?
+        //  - con i Risultati gia' a vista: si sta fermi (al massimo si rimette la barra dov'era, se il
+        //    WME chiudendo il pannello del segmento l'ha spostata);
+        //  - piu' in alto nel pannello: un salto secco ai Risultati, come arrivando da fuori.
+        const giaQui = !!(pressSnap.onPane && start - pressSnap.t < 2000);
+        const fermo = giaQui && pressSnap.risultati;
+        const snap = fermo ? { box: pressSnap.box, top: pressSnap.top } : null;
+        fermoSnap = giaQui ? Object.assign({}, pressSnap, { t: start }) : null;   // la raffica continua da qui
+        revealAt = fermo ? 0 : start;
+        scrollDovuto = false;
+        let navClicks = 0, navClickAt = 0, tabClicks = 0, tabClickAt = 0, shownOnce = false, usato = '', wayUsed = -1, timer = null;
+        const step = () => {
+            clearTimeout(timer);
+            if (token !== revealToken) return;              // nel frattempo e' arrivata un'altra cattura
+            if (userNavAt > start) { revealKick = null; return; }   // hai cliccato tu sulla barra: decidi tu
+            const now = Date.now();
+            // se il WME dice "Script" ma tre clic sulla linguetta non mostrano nulla, l'informazione
+            // e' vecchia (es. pannello del segmento rimasto aperto senza annuncio): si va a vista
+            const inScript = (inScriptTab() === true && tabClicks >= 3) ? null : inScriptTab();
+            if (isOnScreen(tabPaneEl)) {
+                if (!shownOnce) {
+                    shownOnce = true;
+                    // il modo che ha funzionato si riusa per primo; se il WME ci riporta altrove si ricomincia
+                    if (wayUsed >= 0) navWayOk = wayUsed;
+                    navClicks = 0; tabClicks = 0;
+                    if (snap) {
+                        if (snap.box && snap.box.isConnected && Math.abs(snap.box.scrollTop - snap.top) > 1) snap.box.scrollTop = snap.top;
+                    } else if (analisiInArrivo) {
+                        scrollDovuto = true;     // si scende quando i Risultati sono pieni, una volta sola
+                    } else {
+                        scrollToResults();
+                    }
+                    ricordaBarra();
+                    const msg = fermo
+                        ? (usato ? `Risultati gia' a vista: riportato li' in ${now - start} ms, senza scorrere (${usato})` : 'Risultati gia\' a vista: posizione mantenuta')
+                        : giaQui ? `eri gia' su Fonti IT: portato ai Risultati${usato ? ' (' + usato + ')' : ''}`
+                            : `ok in ${now - start} ms${usato ? ' (' + usato + ')' : ' (era gia\' aperto)'}`;
+                    if (revealEsito.indexOf('ok') !== 0 && usato) log('apertura automatica dei risultati:', msg);
+                    revealEsito = msg;
+                }
+            } else {
+                shownOnce = false;
+                const labelOk = isOnScreen(ownTabClickTarget()) || (inScript === true && tabClicks < 3);
+                if (labelOk) {
+                    // sezione Script aperta, ma su un altro script (o non ancora disegnata)
+                    if (now - tabClickAt > 250) {
+                        const t = ownTabClickTarget();
+                        if (t) { t.click(); tabClickAt = now; tabClicks++; usato = usato || 'linguetta Fonti IT'; }
+                    }
+                } else if (navClicks < NAV_CLICK_MAX && now - navClickAt > 350) {
+                    navClickAt = now;   // anche la sola ricerca si fa al massimo ogni 350 ms
+                    const nav = scriptsNavItem();
+                    // Se il WME dice che la sezione aperta NON e' Script, la voce si clicca senza
+                    // dubbi. Se non lo sa, si guarda l'aspetto: ricliccare la voce gia' attiva
+                    // potrebbe richiudere la barra. Se dice che e' Script, la voce non si tocca.
+                    if (nav && (inScript === false || (inScript === null && !isNavActive(nav)))) {
+                        const ordine = navWayOk >= 0 ? [navWayOk, ...NAV_CLICK_WAYS.keys()].filter((v, i, a) => a.indexOf(v) === i) : [...NAV_CLICK_WAYS.keys()];
+                        wayUsed = ordine[navClicks];
+                        const [nome, fn] = NAV_CLICK_WAYS[wayUsed];
+                        ourNavClickAt = Date.now();
+                        try { fn(nav); } catch { /* prossimo modo */ }
+                        navClicks++;
+                        usato = `voce ${navDesc(nav)}${navLearned && navLearned.item === nav ? ' imparata' : ''} con ${nome}`;
+                    }
+                }
+            }
+            if (now - start < REVEAL_MS) { timer = setTimeout(step, REVEAL_PASSO); return; }
+            revealKick = null;
+            if (!isOnScreen(tabPaneEl)) {
+                const nav = scriptsNavItem();
+                revealEsito = `NON RIUSCITA \u00b7 sezione per il WME: ${sidebarTab || (sidebarEventOk ? '(nessun evento)' : '(evento non disponibile)')}`
+                    + ` \u00b7 voce Script: ${navDesc(nav)}${navLearned ? ' (imparata)' : ''}`
+                    + `${nav ? ' \u00b7 attiva: ' + isNavActive(nav) : ''} \u00b7 clic voce: ${navClicks} \u00b7 clic linguetta: ${tabClicks}`;
+                navCache = null;   // alla prossima cattura si cerca di nuovo
+                if (!nav) revealEsito += ' \u00b7 clicca UNA volta a mano la voce Script: lo script la impara e da li\' in poi la usa da solo';
+                log('apertura automatica dei risultati', revealEsito, '\u2014 se continua, scrivi wfitDiag() e mandami il risultato');
+            }
+        };
+        revealKick = step;
+        step();
+    }
+
+    // Il confronto riempie i Risultati un attimo dopo l'apertura: se prima il pannello era troppo
+    // corto per portarli in cima, un secondo scroll li sistema.
+    function scrollAfterAnalyze() {
+        if (!scrollDovuto) return;
+        scrollDovuto = false;
+        if (!revealAt || Date.now() - revealAt > 3000 || userNavAt > revealAt) return;
+        revealAt = 0;
+        if (isOnScreen(tabPaneEl)) { scrollToResults(); ricordaBarra(); }
+    }
+    // Dopo ogni sistemazione si aggiorna la foto per le catture a raffica: i Risultati adesso
+    // sono a vista, quindi la cattura successiva non muove piu' nulla
+    function ricordaBarra() {
+        const f = fotoBarra();
+        if (f.onPane) fermoSnap = f;
     }
 
     // Lista vuota: via risultati, civici disegnati ed evidenziazioni
@@ -5676,13 +6123,18 @@
                         + `${lastHNScan.attesi ? ' \u00b7 segmenti con civici secondo il WME: ' + lastHNScan.attesi : ''}`
                         + `${lastHNScan.come ? ' \u00b7 sorgente: ' + lastHNScan.come : ''}`
                     : '(elenco civici non ancora aperto)',
-                eventoSalvataggioVisto: saveEventSeen
+                eventoSalvataggioVisto: saveEventSeen,
+                aperturaRisultati: `${settings.apriRisultati ? 'attiva' : 'spenta'} \u00b7 ultima: ${revealEsito}`,
+                sezioneAperta: sidebarTab ? `${sidebarTab} (${Math.round((Date.now() - sidebarTabAt) / 1000)} s fa)` : (sidebarEventOk ? '(nessun evento ancora)' : '(evento non disponibile)'),
+                voceScript: navDesc(scriptsNavItem()) + (navLearned ? ' \u00b7 imparata dal tuo clic' : (localStorage.getItem(NAV_KEY) ? ' \u00b7 ricordata' : ' \u00b7 cercata'))
             };
             console.table(d);
             return d;
         };
         // forza l'invio subito, utile per capire se il foglio risponde
         w.wfitInvia = () => { promuoviPending('invio forzato dall\'utente', 'comando wfitInvia()'); return flushLogs(); };
+        // prova a mano l'apertura dei Risultati: vai su un'altra sezione e scrivi wfitApri()
+        w.wfitApri = () => { revealResults(true); return 'apertura avviata: controlla la barra laterale fra un paio di secondi'; };
         // ricontrollo immediato di abilitazione e versione minima
         w.wfitControlla = () => { clearAuthCache(); return controllaAbilitazione(); };
     } catch { /* niente console */ }
