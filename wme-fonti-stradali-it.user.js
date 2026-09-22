@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.3.2
+// @version      0.3.3
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       Francesco Conforti (checcoconf)
 // @copyright    2026 Francesco Conforti
@@ -131,6 +131,18 @@
         ['TREN', 'Trentino-Alto Adige'], ['UMBR', 'Umbria'], ['VALL', "Valle d'Aosta"], ['VENE', 'Veneto']
     ];
     const regNome = code => (REGIONI.find(r => r[0] === code) || [code, code])[1];
+    // Numerazione rossa e nera: SOLO Genova, Savona e Firenze (codici Belfiore). Qui il campo
+    // SPECIFICITA di ANNCSU distingue i civici neri (abitazioni) dai rossi (attivita', rimesse):
+    // i neri restano come ovunque (4, 4a), i rossi prendono la R (3R, 3R/a). Negli altri comuni
+    // SPECIFICITA non viene nemmeno guardato.
+    const NUM_ROSSA = new Map([['D969', 'Genova'], ['I480', 'Savona'], ['D612', 'Firenze']]);
+    const NUM_ROSSA_REG = new Set(['LIGU', 'TOSC']);   // regioni che contengono quei comuni
+    // Nel dizionario degli esponenti il civico rosso porta questo prefisso riservato ("#" nei dati
+    // ANNCSU non compare): cosi' il formato della cache non cambia e rosso e nero non si confondono.
+    const ROSSO_TAG = '#R';
+    const isSpecRossa = v => /^(R|ROSS[OA]|RED)$/.test(String(v || '').replace(/[^A-Za-z]/g, '').toUpperCase());
+    // l'odonimo g appartiene a un comune con numerazione rossa?
+    const numRossaG = g => NUM_ROSSA.has((mem.groups[g] || [])[2]);
     // Due livelli: i pallini dei civici (cliccabili: il clic evidenzia la riga nell'elenco) e
     // l'evidenziazione dei segmenti in lista, che NON deve mai intercettare i clic: sotto c'e'
     // il segmento del WME, e ALT+clic deve arrivarci per toglierlo dalla lista.
@@ -981,6 +993,11 @@
                 if (regs.some(r => !r.pv || r.pv < 9)) {
                     s += ` <span style="color:#c60"><b>Cache di una versione precedente: gli esponenti dei civici possono mancare o essere incompleti (es. 343/A, 20/1). Premi "Scarica regione" per rigenerarla.</b></span>`;
                 }
+                // dalla 0.3.3 i civici rossi di Genova, Savona e Firenze: le cache precedenti non li hanno
+                const senzaRossi = regs.filter(r => NUM_ROSSA_REG.has(r.reg) && (!r.pv || r.pv < 10));
+                if (senzaRossi.length) {
+                    s += ` <span style="color:#c60"><b>${senzaRossi.map(r => r.nomeReg || r.reg).join(' e ')}: cache di una versione precedente, senza i civici rossi di Genova, Savona e Firenze (1R, 3R/a). Riscarica ${pl(senzaRossi.length, 'la regione', 'le regioni')} per averli.</b></span>`;
+                }
                 // colonna esponente sospetta: si vede nel pannello, non solo nel log
                 const bad = regs.filter(r => r.espShare > 0.5);
                 if (bad.length) {
@@ -1285,7 +1302,7 @@
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il bottone: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
-    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il bottone con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato che Waze accetta &mdash; numero pi&ugrave; al massimo due lettere minuscole, quindi <b>343/A &rarr; 343a</b> &mdash; e quelli che Waze non accetta (<b>20/1</b>, <b>12/BIS</b>) restano in lista senza spunta, da inserire a mano. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il bottone <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
+    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il bottone con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato che Waze accetta &mdash; numero pi&ugrave; al massimo due lettere minuscole, quindi <b>343/A &rarr; 343a</b> &mdash; e quelli che Waze non accetta (<b>20/1</b>, <b>12/BIS</b>) restano in lista senza spunta, da inserire a mano. A <b>Genova, Savona e Firenze</b> lo script legge anche la numerazione <b>rossa e nera</b> (campo SPECIFICITA di ANNCSU): i neri restano come ovunque (<b>4, 4a</b>), i rossi prendono la R (<b>3R, 3R/a</b>); in elenco vengono prima i neri e poi i rossi, e lato e sequenza si controllano separatamente per le due numerazioni. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il bottone <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
     <p><span class="wfit-gnum">6 &middot; Traccia le vie dell&#39;agro.</span> Serve a una cosa sola: capire <b>come si chiama</b> una strada di campagna che sulla mappa non ha nome. In <b>sola lettura</b>, prende i civici ANNCSU a schermo, li assegna al segmento pi&ugrave; vicino e disegna il percorso dei <b>soli segmenti senza nome</b>, uno per via. Nell&#39;elenco ogni riga dice quale contrada &egrave; secondo ANNCSU, quanti segmenti restano da nominare e su quanti civici si basa; se altri tronconi della stessa via hanno gi&agrave; un nome te lo mostra, ed &egrave; l&#39;indizio migliore. All&#39;apertura la mappa resta pulita: il <b>quadratino</b> accanto a ogni via accende o spegne il suo tracciato (e il colore non cambia quando sposti la mappa), il clic sulla <b>riga</b> la colora e ne seleziona i segmenti. <b>Applica</b> scrive il nome sui segmenti senza nome, con le regole di <b>Applica come</b>. I civici non si vedono e non si inseriscono da qui: per quelli cattura i segmenti e usa l&#39;elenco di controllo, come sempre. All&#39;accensione si porta allo <b>zoom 16</b> e poi ti segue mentre giri. <b>Solo per l&#39;agro</b>: in paese si superano subito le <b>500 strade</b> del limite, che c&#39;&egrave; apposta perch&eacute; su Waze si lavora di precisione.</p>
     <p><span class="wfit-gnum">7 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito; <b>"gi&agrave; su Waze ma posizionato male"</b> &rarr; il numero c'&egrave; gi&agrave; su questa strada in un altro punto: trascina quello esistente sul punto giusto, non aggiungerne un altro. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
     <p class="wfit-key"><span class="wfit-gnum">8 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
@@ -1722,6 +1739,8 @@
         // quasi certamente stiamo leggendo la colonna sbagliata (un progressivo, un codice) e
         // ogni civico si ritroverebbe un "/n" che nella realta' non esiste
         let withEsp = 0; const espTally = new Map(); let mapSource = '?';
+        // numerazione rossa (Genova, Savona, Firenze): quanti rossi e che valori ha SPECIFICITA
+        let rossi = 0; const specTally = new Map();
 
         const handleLine = line => {
             if (!line || line.length < 5) return;
@@ -1760,7 +1779,16 @@
             }
             if (!es && mapping.esp >= 0) es = (f[mapping.esp] || '').trim().toUpperCase();
             civn.push(nc);
-            cive.push(espDict.index(es));
+            // Genova, Savona, Firenze: il civico rosso si marca nel dizionario esponenti (3R, 3R/A).
+            // Solo civici con numero: un accesso senza numero resta com'e'.
+            let esSalvato = es;
+            if (mapping.spec >= 0 && NUM_ROSSA.has(bel)) {
+                const sp = (f[mapping.spec] || '').trim().toUpperCase();
+                specTally.set(sp || '(vuoto)', (specTally.get(sp || '(vuoto)') || 0) + 1);
+                if (nc > 0 && isSpecRossa(sp)) { esSalvato = ROSSO_TAG + es; rossi++; }
+            }
+            cive.push(espDict.index(esSalvato));
+            // il controllo sulla colonna esponente guarda solo l'esponente vero, non il marcatore rosso
             if (es) { withEsp++; espTally.set(es, (espTally.get(es) || 0) + 1); }
         };
 
@@ -1776,14 +1804,22 @@
             .map(([v, n]) => `${v} (${n})`).join(', ');
         log(`esponenti: ${withEsp} civici su ${tot} (${(quota * 100).toFixed(1)}%) \u2014 mappatura ${mapSource}` +
             (topEsp ? ` \u2014 piu' frequenti: ${topEsp}` : ' \u2014 nessuno'));
+        if (specTally.size) {
+            const topSpec = [...specTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)
+                .map(([v, n]) => `${v} (${n})`).join(', ');
+            log(`numerazione rossa (Genova, Savona, Firenze): ${rossi} civici rossi \u2014 valori di SPECIFICITA: ${topSpec}`);
+            if (!rossi) log('ATTENZIONE: nessun civico rosso riconosciuto. Se fra i valori qui sopra ce n\'e\' uno che indica il rosso, segnalalo.');
+        } else if (mapping && mapping.spec < 0 && NUM_ROSSA_REG.has(reg)) {
+            log('ATTENZIONE: colonna SPECIFICITA non trovata nell\'intestazione: i civici rossi di Genova, Savona e Firenze non si possono distinguere.');
+        }
         if (quota > 0.5) {
             log(`ATTENZIONE: piu' di meta' dei civici risulta avere un esponente. E' molto probabile che ` +
                 `la colonna letta come ESPONENTE sia in realta' un'altra (progressivo o codice interno). ` +
                 `Controlla i valori qui sopra: se sono numeri consecutivi e non lettere, segnala il problema.`);
         }
         return {
-            reg, nomeReg, quando: Date.now(), count: lons.total, read, diag, pv: 9,
-            espShare: quota, espTop: topEsp,
+            reg, nomeReg, quando: Date.now(), count: lons.total, read, diag, pv: 10,
+            espShare: quota, espTop: topEsp, rossi,
             lons: lons.done().buffer,
             lats: lats.done().buffer,
             gids: gids.done().buffer,
@@ -1934,6 +1970,7 @@
             loc: find(h => h.startsWith('LOCALITA') || h.startsWith('DENOMINAZIONE_LOCALITA')),
             civ: find(h => h === 'CIVICO'),
             esp: find(h => h === 'ESPONENTE'),
+            spec: find(h => h.startsWith('SPECIFICIT')),   // SPECIFICITA / SPECIFICITA' / SPECIFICITÀ
             lon: find(h => h.startsWith('COORD_X') || h === 'LON' || h === 'LONGITUDE'),
             lat: find(h => h.startsWith('COORD_Y') || h === 'LAT' || h === 'LATITUDE')
         };
@@ -2023,6 +2060,18 @@
         lastDotFeatures = [];
         refreshMapLayer();
         log(`indice ricostruito: ${total} civici, ${groups.length} odonimi, ${esps.length - 1} esponenti distinti, ${grid.size} celle`);
+    }
+
+    // Etichetta del civico dall'archivio: 343, 343/A; nei comuni con numerazione rossa il rosso
+    // diventa 3R o 3R/A (poi wazeHn lo porta al formato Waze: 3R/a).
+    function civLabel(cv, esp) {
+        const n = cv ? String(cv) : '';
+        if (esp && esp.startsWith(ROSSO_TAG)) {
+            if (!n) return '';
+            const lett = esp.slice(ROSSO_TAG.length);
+            return n + 'R' + (lett ? '/' + lett : '');
+        }
+        return n + (esp ? '/' + esp : '');
     }
 
     function gridKey(lon, lat) { return Math.floor(lon / GRID_CELL) + '_' + Math.floor(lat / GRID_CELL); }
@@ -3269,7 +3318,7 @@
                 const chiave = (cv || ce) ? cv * 1024 + ce : -(i + 1);
                 if (v.chiavi.has(chiave)) continue;
                 v.chiavi.add(chiave);
-                v.punti.push({ lon: mem.lons[i], lat: mem.lats[i], label: (cv ? String(cv) : '') + (ce ? '/' + mem.esps[ce] : '') });
+                v.punti.push({ lon: mem.lons[i], lat: mem.lats[i], label: civLabel(cv, ce ? mem.esps[ce] : '') });
             }
 
             // 3) Ogni segmento va all'odonimo che ha piu' civici lungo di lui: e' cosi' che
@@ -3307,10 +3356,11 @@
                     via.segmenti.push({ id: sg.id, c: sg.c, mid: lineMidpoint(sg.c) });
                     if (bloccata) via.bloccate++;
                 }
+                const nrBest = numRossaG(gBest);
                 for (const [g2, v2] of perG) {
                     if (g2 !== gBest) continue;
                     for (const q of v2.punti) {
-                        const kq = hnKey(q.label) || (q.lon + ',' + q.lat);
+                        const kq = hnKey(q.label, nrBest) || (q.lon + ',' + q.lat);
                         if (via.chiavi.has(kq)) continue;
                         via.chiavi.add(kq);
                         via.punti.push(q);
@@ -3666,7 +3716,7 @@
         lastDupCount = 0;
         for (const p of pts) {
             const cv = mem.civn[p.i] || 0, ce = mem.cive[p.i] || 0;
-            const label = (cv ? String(cv) : '') + (ce ? '/' + mem.esps[ce] : '');
+            const label = civLabel(cv, ce ? mem.esps[ce] : '');
             const lon = mem.lons[p.i], lat = mem.lats[p.i];
             // numerati: chiave odonimo + numero/esponente (il punto NON entra nella chiave: cosi'
             // due rilievi dello stesso civico a pochi metri risultano ripetizioni dello stesso numero)
@@ -3688,7 +3738,7 @@
             }
             let a = lastPtsByG.get(p.g);
             if (!a) { a = []; lastPtsByG.set(p.g, a); }
-            a.push({ lon, lat, label, d: p.d, dup: rep > 0, rep: rep + 1, twinD });
+            a.push({ lon, lat, label, d: p.d, dup: rep > 0, rep: rep + 1, twinD, nr: numRossaG(p.g) });
         }
         if (lastDupCount) {
             log(`numeri civici ripetuti nel match (mostrati comunque): ${lastDupCount}`);
@@ -4278,7 +4328,9 @@
     }
 
     // Come si presenta una riga in forma 20/1, secondo la modalita' scelta dall'utente
-    const suspNote = () => ['warn', '\u26a0\ufe0f formato non accettato da Waze: va inserito a mano'];
+    const suspNote = p => (p && p.nr && isNeroConR(p.label))
+        ? ['warn', '\u26a0\ufe0f nero con esponente R: su Waze si confonde col rosso, va inserito a mano']
+        : ['warn', '\u26a0\ufe0f formato non accettato da Waze: va inserito a mano'];
 
     const HN_MAX_D = 45; // Waze rifiuta i civici troppo lontani dal segmento: oltre questo limite si salta
     // Soglia dei civici "sovrapposti": deliberatamente strettissima. Serve a prendere SOLO i punti
@@ -4291,10 +4343,10 @@
     const HN_SAME_DEG = 6e-4; // pre-filtro grossolano prima della distanza vera (evita mille haversine)
 
     // Il civico numero X esiste gia' su Waze qui vicino? Unico posto in cui si decide.
-    function findExistingHN(existing, label, lon, lat) {
+    function findExistingHN(existing, label, lon, lat, nr) {
         if (!existing || !existing.length) return null;
-        const k = hnKey(label);
-        return existing.find(h => !h.rpp && hnKey(h.num) === k &&
+        const k = hnKey(label, nr);
+        return existing.find(h => !h.rpp && hnKey(h.num, nr) === k &&
             Math.abs(h.c[0] - lon) < HN_SAME_DEG && Math.abs(h.c[1] - lat) < HN_SAME_DEG &&
             haversine(h.c[0], h.c[1], lon, lat) < HN_SAME_D) || null;
     }
@@ -4304,12 +4356,12 @@
     // solo il raggio di 40 m e quindi non lo vedeva: la riga arrivava spuntata e l'inserimento
     // creava un doppione (che Waze rifiuta al salvataggio, o peggio accetta lasciando due punti).
     // Si guarda solo ai civici della strada in lista: un "5" di una via vicina non c'entra nulla.
-    function findMisplacedHN(existing, label, lon, lat) {
+    function findMisplacedHN(existing, label, lon, lat, nr) {
         if (!existing || !existing.length) return null;
         let best = null, bestD = Infinity;
-        const k = hnKey(label);
+        const k = hnKey(label, nr);
         for (const h of existing) {
-            if (!h.own || h.rpp || hnKey(h.num) !== k) continue;
+            if (!h.own || h.rpp || hnKey(h.num, nr) !== k) continue;
             const d = haversine(h.c[0], h.c[1], lon, lat);
             if (d < HN_SAME_D) return null; // ce n'e' uno gia' al posto giusto: caso normale
             if (d < bestD) { bestD = d; best = h; }
@@ -4364,24 +4416,54 @@
     // massimo 2 lettere minuscole, mai una lettera in testa (34a, 3ce, 729ar). Niente barra.
     // ANNCSU scrive "343/A": su Waze diventa "343a".
     const HN_WAZE_RE = /^\d{1,5}[a-z]{0,2}$/;
-    function wazeHn(lbl) {
-        const m = /^\s*(\d{1,5})\s*(?:\/?\s*([A-Za-z]{1,2}))?\s*$/.exec(String(lbl == null ? '' : lbl));
+    // Numerazione rossa (SOLO Genova, Savona, Firenze: parametro nr). Neri come ovunque (4, 4a);
+    // rossi con la R subito dopo il numero e l'eventuale lettera dopo la barra: 3R, 3R/a.
+    // La R attaccata al numero (senza barra) vuol dire "rosso" anche se scritta minuscola: 3r -> 3R.
+    // La lettera dopo la barra e' l'esponente del rosso, sempre minuscola.
+    const HN_ROSSO_RE = /^\d{1,5}R(?:\/[a-z]{1,2})?$/;
+    const ROSSO_IN_RE = /^\s*(\d{1,5})\s*[Rr]\s*(?:\/\s*([A-Za-z]{1,2}))?\s*$/;
+    // Etichetta di un civico rosso (3R, 3R/A, 3r/a): serve a ordinare e a separare le due numerazioni
+    const isRossoLbl = lbl => /^\s*\d+\s*[Rr](?:\s*\/|\s*$)/.test(String(lbl == null ? '' : lbl));
+    // Nero con esponente R ("3/R"): su Waze sarebbe "3r", che in questi comuni si legge come rosso
+    const isNeroConR = lbl => /^\s*\d+\s*\/\s*[Rr]\s*$/.test(String(lbl == null ? '' : lbl));
+    function wazeHn(lbl, nr) {
+        const s = String(lbl == null ? '' : lbl);
+        if (nr) {
+            const r = ROSSO_IN_RE.exec(s);
+            if (r) return r[1] + 'R' + (r[2] ? '/' + r[2].toLowerCase() : '');
+            if (isNeroConR(s)) return null;   // ambiguo col rosso: va inserito a mano
+        }
+        const m = /^\s*(\d{1,5})\s*(?:\/?\s*([A-Za-z]{1,2}))?\s*$/.exec(s);
         return m ? m[1] + (m[2] || '').toLowerCase() : null;
     }
     // Chiave di confronto fra civici scritti in modi diversi: 18/B, 18B, 18 b -> 18b.
     // La barra davanti a una cifra resta: "20/1" non deve diventare il civico 201.
-    const hnKey = v => String(v == null ? '' : v).toLowerCase().replace(/\s+/g, '').replace(/\/(?=[a-z])/g, '');
+    // Con la numerazione rossa (nr) il rosso ha una chiave sua (3R, 3R/a) e non si confonde
+    // mai col nero: 3R non e' 3, e 3R/a non e' 3a.
+    const hnKey = (v, nr) => {
+        const s = String(v == null ? '' : v);
+        if (nr) {
+            const r = /^\s*(\d+)\s*[Rr]\s*(?:\/\s*([A-Za-z0-9]+))?\s*$/.exec(s);
+            if (r) return r[1] + 'R' + (r[2] ? '/' + r[2].toLowerCase() : '');
+        }
+        return s.toLowerCase().replace(/\s+/g, '').replace(/\/(?=[a-z])/g, '');
+    };
 
     // Civici che Waze non accetta cosi' come sono: esponente numerico ("20/1", spesso una
     // colonna del CSV letta male) o di piu' lettere ("12/BIS"). Si mostrano, ma non si inseriscono.
-    const isSusp = lbl => !wazeHn(lbl);
+    const isSusp = (lbl, nr) => !wazeHn(lbl, nr);
 
     // Validazione di quello che l'utente scrive nella casella: "18b" / "18 B" / "18/b" -> "18b".
+    // Nei comuni con numerazione rossa anche "3R", "3r", "3R/A" -> "3R", "3R/a".
     // null se Waze non lo accetterebbe.
-    function normHn(s) {
-        const v = wazeHn(s);
-        return v && HN_WAZE_RE.test(v) ? v : null;
+    function normHn(s, nr) {
+        const v = wazeHn(s, nr);
+        return v && (HN_WAZE_RE.test(v) || (nr && HN_ROSSO_RE.test(v))) ? v : null;
     }
+    // Formati ammessi, per i messaggi all'utente
+    const formatiHn = nr => nr
+        ? 'per i neri un numero seguito da al massimo 2 lettere (4, 4a), per i rossi numero, R ed eventuale lettera (3R, 3R/a)'
+        : 'un numero seguito da al massimo 2 lettere (18, 18b, 7ab)';
 
     function mapCenter() {
         try {
@@ -4783,44 +4865,51 @@
         } else return 0;
 
         const num = x => parseInt(x.p.label, 10);
-        const gruppi = [cand.filter(x => num(x) % 2 === 1), cand.filter(x => num(x) % 2 === 0)];
-        const maggioranza = g => {
-            const lati = g.map(x => (pos.get(x) || {}).side).filter(v => v);
-            if (lati.length < 3) return 0;
-            const sx = lati.filter(v => v > 0).length;
-            if (sx / lati.length >= 0.75) return 1;
-            if ((lati.length - sx) / lati.length >= 0.75) return -1;
-            return 0;
-        };
-        const mDisp = maggioranza(gruppi[0]), mPari = maggioranza(gruppi[1]);
         const flagged = new Map();
-        // lato: solo se dispari e pari stanno davvero su lati opposti
-        if (mDisp && mPari && mDisp !== mPari) {
-            gruppi.forEach((g, gi) => {
-                const m = gi === 0 ? mDisp : mPari;
-                for (const x of g) { const q = pos.get(x); if (q && q.side && q.side !== m) flagged.set(x, gi === 0 ? 'lato dei pari' : 'lato dei dispari'); }
-            });
-        }
-        // sequenza: solo con la strada in fila dall'inizio alla fine
-        if (chain) {
-            for (const g of gruppi) {
-                const seq = g.filter(x => pos.has(x)).sort((a, b) => pos.get(a).along - pos.get(b).along);
-                if (seq.length < 4) continue;
-                const lis = (arr, cmp) => {
-                    const n = arr.length, len = new Array(n).fill(1), prev = new Array(n).fill(-1);
-                    let bi = 0;
-                    for (let i = 0; i < n; i++) {
-                        for (let j = 0; j < i; j++) if (cmp(num(arr[j]), num(arr[i])) && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
-                        if (len[i] > len[bi]) bi = i;
-                    }
-                    const keep = new Set();
-                    for (let i = bi; i >= 0; i = prev[i]) keep.add(arr[i]);
-                    return keep;
-                };
-                const up = lis(seq, (a, b) => a <= b), down = lis(seq, (a, b) => a >= b);
-                const keep = up.size >= down.size ? up : down;
-                if (keep.size / seq.length < 0.7) continue;   // quadro confuso: meglio tacere
-                for (const x of seq) if (!keep.has(x) && !flagged.has(x)) flagged.set(x, 'fuori sequenza');
+        // Genova, Savona, Firenze: neri e rossi sono due numerazioni indipendenti, ognuna coi suoi
+        // dispari, pari e la sua sequenza. Mescolarle darebbe falsi "fuori sequenza" a ogni rosso.
+        const serie = ctx.nr
+            ? [cand.filter(x => !isRossoLbl(x.p.label)), cand.filter(x => isRossoLbl(x.p.label))]
+            : [cand];
+        for (const sc of serie) {
+            const gruppi = [sc.filter(x => num(x) % 2 === 1), sc.filter(x => num(x) % 2 === 0)];
+            const maggioranza = g => {
+                const lati = g.map(x => (pos.get(x) || {}).side).filter(v => v);
+                if (lati.length < 3) return 0;
+                const sx = lati.filter(v => v > 0).length;
+                if (sx / lati.length >= 0.75) return 1;
+                if ((lati.length - sx) / lati.length >= 0.75) return -1;
+                return 0;
+            };
+            const mDisp = maggioranza(gruppi[0]), mPari = maggioranza(gruppi[1]);
+            // lato: solo se dispari e pari stanno davvero su lati opposti
+            if (mDisp && mPari && mDisp !== mPari) {
+                gruppi.forEach((g, gi) => {
+                    const m = gi === 0 ? mDisp : mPari;
+                    for (const x of g) { const q = pos.get(x); if (q && q.side && q.side !== m) flagged.set(x, gi === 0 ? 'lato dei pari' : 'lato dei dispari'); }
+                });
+            }
+            // sequenza: solo con la strada in fila dall'inizio alla fine
+            if (chain) {
+                for (const g of gruppi) {
+                    const seq = g.filter(x => pos.has(x)).sort((a, b) => pos.get(a).along - pos.get(b).along);
+                    if (seq.length < 4) continue;
+                    const lis = (arr, cmp) => {
+                        const n = arr.length, len = new Array(n).fill(1), prev = new Array(n).fill(-1);
+                        let bi = 0;
+                        for (let i = 0; i < n; i++) {
+                            for (let j = 0; j < i; j++) if (cmp(num(arr[j]), num(arr[i])) && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
+                            if (len[i] > len[bi]) bi = i;
+                        }
+                        const keep = new Set();
+                        for (let i = bi; i >= 0; i = prev[i]) keep.add(arr[i]);
+                        return keep;
+                    };
+                    const up = lis(seq, (a, b) => a <= b), down = lis(seq, (a, b) => a >= b);
+                    const keep = up.size >= down.size ? up : down;
+                    if (keep.size / seq.length < 0.7) continue;   // quadro confuso: meglio tacere
+                    for (const x of seq) if (!keep.has(x) && !flagged.has(x)) flagged.set(x, 'fuori sequenza');
+                }
             }
         }
         let n = 0;
@@ -4948,8 +5037,11 @@
 
     // Spiegazione della riga, diversa a seconda di come e' arrivato quel civico
     function hnRowTitle(p) {
-        const base = p.susp
-            ? `Waze accetta solo numeri seguiti da al massimo due lettere minuscole (34a, 3ce): "${p.label}" cos\u00ec non si pu\u00f2 inserire. `
+        const base = p.susp && p.nr && isNeroConR(p.label)
+            ? `Civico nero con esponente R: su Waze diventerebbe "${wazeHn(p.label) || p.label}", che a Genova, Savona e Firenze si legge come civico rosso. `
+                + 'Per non confondere le due numerazioni lo script non lo inserisce: se sul posto esiste davvero, inseriscilo a mano.'
+            : p.susp
+            ? `Waze accetta solo ${formatiHn(p.nr)}: "${p.label}" cos\u00ec non si pu\u00f2 inserire. `
                 + 'Se sul posto il civico \u00e8 davvero questo, va inserito a mano seguendo la guida Numeri civici della Wazeopedia. '
                 + 'Se hai verificato che il numero giusto \u00e8 un altro, correggilo nella casella e spuntalo.'
             : p.ovl
@@ -4966,7 +5058,7 @@
     // il testo si spezzava una parola per riga.
     function addHnRow(p, ctx) {
         const row = document.createElement('div');
-        p.susp = !p.manual && isSusp(p.label);
+        p.susp = !p.manual && isSusp(p.label, p.nr);
         row.className = 'wfit-hnrow' + (p.susp ? ' wfit-hnsusp' : p.ovl ? ' wfit-hnovl' : p.dup ? ' wfit-hndup' : '');
         row.title = hnRowTitle(p);
 
@@ -4977,7 +5069,7 @@
         if (p.susp && settings.suspMode === 'escludi') row.style.display = 'none';
         const inp = document.createElement('input');
         // nella casella c'e' gia' il numero come lo vuole Waze (343/A -> 343a)
-        inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.manual ? p.label : (wazeHn(p.label) || p.label);
+        inp.type = 'text'; inp.className = 'wfit-hnnum'; inp.value = p.manual ? p.label : (wazeHn(p.label, p.nr) || p.label);
         inp.addEventListener('input', () => {
             inp.classList.remove('wfit-bad-in');
             // il numero e' cambiato: quello che sapevamo del civico gia' su Waze non vale piu'
@@ -5010,7 +5102,7 @@
             note.textContent = txt || '';
             note.style.display = txt ? '' : 'none';
         };
-        if (p.susp) setNote(...suspNote());
+        if (p.susp) setNote(...suspNote(p));
         else if (p.ovl) setNote('ovl', `${p.ovlN} civici sulla stessa coordinata: scegli quelli veri, poi vanno spostati`);
         else if (p.dup) setNote('dup', `stesso numero, punto ${p.rep} \u00b7 ${Math.round(p.twinD || 0)} m dal punto 1`);
         else setNote('', '');
@@ -5083,8 +5175,8 @@
         let streetId = null;
         try { const st = segAddressState(p.segId); streetId = st.pn; } catch { /* sotto */ }
         if (streetId == null) { toast('Non riesco a capire la via di questo civico: prima premi "Applica ai segmenti" e salva.', 9000); return; }
-        const num = normHn(p.label);
-        if (!num) { toast('Numero non valido per un RPP: Waze accetta un numero seguito da al massimo 2 lettere.', 8000); return; }
+        const num = normHn(p.label, p.nr);
+        if (!num) { toast(`Numero non valido per un RPP: Waze accetta ${formatiHn(p.nr)}.`, 8000); return; }
         const viaTxt = streetLabel(streetId);
         if (!confirm(`Creo un luogo residenziale (RPP) qui:\n\n\u2022 indirizzo: ${viaTxt} ${num}\n`
             + `\u2022 punto del Place: sul civico ANNCSU\n`
@@ -5144,19 +5236,19 @@
         const addBox = document.createElement('div');
         addBox.className = 'wfit-hnadd';
         const addIn = document.createElement('input');
-        addIn.type = 'text'; addIn.placeholder = 'es. 18b (da Street View)';
+        addIn.type = 'text'; addIn.placeholder = ctx.nr ? 'es. 18b, 5R, 5R/a (da Street View)' : 'es. 18b (da Street View)';
         const addBtn = document.createElement('button');
         addBtn.className = 'wfit-btn'; addBtn.textContent = '+ Aggiungi al centro mappa';
         addBtn.title = 'Centra prima la mappa sul portone (clic su un civico vicino e poi trascina), scrivi il numero e premi: la riga nasce l\u00ec, gi\u00e0 spuntata';
         addBox.appendChild(addIn); addBox.appendChild(addBtn);
         const doAdd = () => {
-            const v = normHn(addIn.value);
-            if (!v) { toast('Numero non valido: Waze accetta un numero seguito da al massimo 2 lettere (18, 18b, 7ab).'); addIn.focus(); return; }
+            const v = normHn(addIn.value, ctx.nr);
+            if (!v) { toast(`Numero non valido: Waze accetta ${formatiHn(ctx.nr)}.`); addIn.focus(); return; }
             const c = mapCenter();
             if (!c) { toast('Non riesco a leggere il centro mappa in questa versione del WME.'); return; }
             const d = nearestCapturedDist(c[0], c[1]);
             if (d > HN_MAX_D) { toast(`Il centro mappa \u00e8 a ~${Math.round(d)} m dai segmenti in lista: oltre ${HN_MAX_D} m Waze lo rifiuterebbe. Avvicinati alla strada e riprova.`, 9000); return; }
-            const row = ctx.addRow({ lon: c[0], lat: c[1], label: v, d, manual: true });
+            const row = ctx.addRow({ lon: c[0], lat: c[1], label: v, d, manual: true, nr: !!ctx.nr });
             ctx.listDiv.prepend(row);
             addIn.value = '';
             ctx.updateGo();
@@ -5172,16 +5264,16 @@
         let bad = false;
         for (const x of ctx.rows) {
             if (!x.cb.checked) continue;
-            const v = normHn(x.inp.value);
+            const v = normHn(x.inp.value, x.p.nr);
             if (!v) { x.inp.classList.add('wfit-bad-in'); bad = true; continue; }
             sel.push({ lon: x.p.lon, lat: x.p.lat, d: x.p.d, label: v, far: x.p.wazeFar || 0, ovl: x.p.ovl || 0,
-                segId: x.p.segId != null ? x.p.segId : null, altro: x.p.altro || null, rpp: !!x.p.rpp });
+                segId: x.p.segId != null ? x.p.segId : null, altro: x.p.altro || null, rpp: !!x.p.rpp, nr: !!x.p.nr });
         }
         // due o piu' civici dello stesso gruppo: nascono sovrapposti e andranno separati a mano
         const perGruppo = {};
         for (const x of sel) if (x.ovl) bump(perGruppo, x.ovl);
         for (const x of sel) x.stack = !!(x.ovl && perGruppo[x.ovl] > 1);
-        if (bad) { toast('Controlla i numeri evidenziati in rosso: Waze accetta un numero seguito da al massimo 2 lettere (18, 18b, 7ab).', 7000); return null; }
+        if (bad) { toast(`Controlla i numeri evidenziati in rosso: Waze accetta ${formatiHn(ctx.nr)}.`, 7000); return null; }
         if (!sel.length) return null;
         // regole della guida Numeri civici: indirizzo gia' fatto come RPP, o accesso su un'altra via
         const rpp = sel.filter(x => x.rpp);
@@ -5267,7 +5359,7 @@
     ];
 
     function buildHnSuspBar(shown, ctx) {
-        const nSusp = shown.filter(p => isSusp(p.label)).length;
+        const nSusp = shown.filter(p => isSusp(p.label, p.nr)).length;
         if (!nSusp) return;
         const bar = document.createElement('div');
         bar.className = 'wfit-muted wfit-hnsuspbar';
@@ -5281,7 +5373,7 @@
                 if (!x.p.susp) continue;
                 x.row.style.display = (m === 'escludi') ? 'none' : '';
                 x.cb.checked = false;
-                x.setNote(...suspNote());
+                x.setNote(...suspNote(x.p));
             }
             ctx.updateGo();
         };
@@ -5309,7 +5401,7 @@
     function annotateExistingHNs(ctx) {
         return loadExistingHNs().then(ex => {
             try { annotateAccessStreet(ctx, hnSegmentContext(ctx.rName ? toWazeCase(ctx.rName) : '')); } catch (e) { log('controllo accessi KO', e); }
-            const rppKeys = new Set(ex.filter(h => h.rpp).map(h => hnKey(h.num)));
+            const rppKeys = new Set(ex.filter(h => h.rpp).map(h => hnKey(h.num, ctx.nr)));
             // si dice sempre su cosa e' stato fatto il confronto: se la via e' lunga e ne hai
             // caricato solo un pezzo, un doppione fuori vista lo script non puo' vederlo
             if (ctx.scan) {
@@ -5341,8 +5433,8 @@
             let marked = 0, moved = 0, rpp = 0;
             for (const x of ctx.rows) {
                 if (x.p.manual) continue;
-                const label = normHn(x.inp.value) || x.p.label;
-                if (rppKeys.has(hnKey(label))) {
+                const label = normHn(x.inp.value, x.p.nr) || x.p.label;
+                if (rppKeys.has(hnKey(label, x.p.nr))) {
                     x.cb.checked = false;
                     x.p.rpp = true;
                     x.row.classList.add('wfit-hnwaze');
@@ -5353,7 +5445,7 @@
                     rpp++;
                     continue;
                 }
-                const near = findExistingHN(ex, label, x.p.lon, x.p.lat);
+                const near = findExistingHN(ex, label, x.p.lon, x.p.lat, x.p.nr);
                 if (near) {
                     x.cb.checked = false;
                     x.p.wazeFar = null;
@@ -5367,7 +5459,7 @@
                     continue;
                 }
                 // stesso numero gia' sulla via, ma piazzato altrove: NON e' un civico da aggiungere
-                const far = findMisplacedHN(ex, label, x.p.lon, x.p.lat);
+                const far = findMisplacedHN(ex, label, x.p.lon, x.p.lat, x.p.nr);
                 if (!far) continue;
                 x.cb.checked = false;
                 x.p.wazeFar = Math.round(far.d);
@@ -5411,9 +5503,12 @@
 
         // ordine per numero civico (poi per esponente): il giro di verifica segue la strada,
         // non la distanza dal segmento. Nessun tetto: si mostrano TUTTI i civici validi.
+        // Genova, Savona, Firenze: prima tutti i neri, poi tutti i rossi (sono due numerazioni distinte)
+        const nrVia = numRossaG(r.g);
+        const rossoDi = p => (nrVia && isRossoLbl(p.label)) ? 1 : 0;
         cand.list.sort((a, b) => {
             const ka = splitHn(a.label), kb = splitHn(b.label);
-            return (ka[0] - kb[0]) || ka[1].localeCompare(kb[1]);
+            return (rossoDi(a) - rossoDi(b)) || (ka[0] - kb[0]) || ka[1].localeCompare(kb[1]);
         });
         const shown = cand.list;
         // civici praticamente nello stesso punto: si marcano prima di costruire le righe,
@@ -5423,6 +5518,7 @@
         const ctx = createHnReviewBox(shown, cand);
         ctx.rName = r.name;
         ctx.r = r;
+        ctx.nr = nrVia;
         if (!rppSupportato()) ctx.box.classList.add('wfit-norpp');
         for (const p of shown) ctx.addRow(p);
         ctx.box.appendChild(buildHnAddBox(ctx));
@@ -5480,17 +5576,19 @@
         // Ultimo filtro prima di scrivere sulla mappa: un numero che su questa via esiste gia'
         // NON viene inserito, in nessun caso. Waze accetta un solo punto per numero, e un
         // doppione verrebbe rifiutato al salvataggio o creerebbe confusione.
-        const giaSullaVia = new Set(existing.filter(h => h.own).map(h => hnKey(h.num)));
+        const giaSullaVia = {};   // chiavi per numerazione: normale e rossa (Genova, Savona, Firenze)
+        const giaKeys = nr => giaSullaVia[nr ? 1 : 0] ||
+            (giaSullaVia[nr ? 1 : 0] = new Set(existing.filter(h => h.own).map(h => hnKey(h.num, nr))));
         const one = p => {
-            if (findExistingHN(existing, p.label, p.lon, p.lat)) { tally.dup++; rec(p, 'gia_presente', 'civico gia\' su Waze'); return; }
-            const far = findMisplacedHN(existing, p.label, p.lon, p.lat);
+            if (findExistingHN(existing, p.label, p.lon, p.lat, p.nr)) { tally.dup++; rec(p, 'gia_presente', 'civico gia\' su Waze'); return; }
+            const far = findMisplacedHN(existing, p.label, p.lon, p.lat, p.nr);
             if (far) {
                 tally.moved++;
                 rec(p, 'non_inserito', `civico gia' su questa strada a ~${Math.round(far.d)} m: va spostato, non aggiunto`);
                 return;
             }
             // stesso numero sulla via letto da una sorgente senza coordinate utili (o come RPP)
-            if (giaSullaVia.has(hnKey(p.label))) {
+            if (giaKeys(p.nr).has(hnKey(p.label, p.nr))) {
                 tally.dup++;
                 rec(p, 'gia_presente', 'numero gi\u00e0 presente su questa via');
                 return;

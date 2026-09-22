@@ -353,6 +353,28 @@ che Waze non accetta (`20/1`, `12/BIS`) restano in lista ma senza spunta, e vann
 Ogni civico viene agganciato al segmento **della sua via** più vicino, così un civico d'angolo non
 finisce sulla traversa.
 
+### Numerazione rossa e nera (Genova, Savona, Firenze)
+
+In questi tre comuni i civici sono di due colori: **neri** per le abitazioni e **rossi** per attività
+commerciali, rimesse e ingressi secondari. ANNCSU li distingue nel campo `SPECIFICITA`, e lo script lo
+legge **solo per questi tre comuni**:
+
+| ANNCSU | Su Waze |
+|---|---|
+| nero `4` | `4` |
+| nero `4` esponente `A` | `4a` |
+| rosso `3` | `3R` |
+| rosso `3` esponente `A` | `3R/a` |
+
+Le due numerazioni sono indipendenti: `3R` e `3` sono civici diversi, anche per il controllo dei
+doppioni. In elenco vengono prima i neri e poi i rossi, e il controllo di lato e sequenza si fa
+separatamente per le due serie. Nella casella la `R` attaccata al numero vuol dire sempre *rosso*
+(anche scritta `3r`); per questo un civico **nero con esponente R** (`3/R`) resta senza spunta e va
+inserito a mano, perché su Waze si confonderebbe col rosso.
+
+Serve una cache generata dalla 0.3.3 in poi: se avevi già scaricato Liguria o Toscana, il pannello te
+lo ricorda e basta riscaricarle.
+
 ### Cosa vedi nell'elenco
 
 | Elemento | Significato |
@@ -592,6 +614,7 @@ Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il p
 | *città vuota ("Nessuno") della regione giusta non trovata* | serve per la regola fuori centro abitato | apri o aggiungi in zona un segmento senza città e riprova |
 | *rampa: …* | hai catturato una rampa | toglila dalla lista: le rampe non si nominano con ANNCSU |
 | *formato non accettato da Waze* | esponente numerico o di più di due lettere | inseriscilo a mano |
+| *nero con esponente R* | a Genova, Savona e Firenze `3r` su Waze si legge come rosso | verifica sul posto e inseriscilo a mano |
 | *accesso su …* | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il bottone **RPP** |
 | *sei in modalità snapshot / pratica* | l'editor non salverebbe le modifiche | esci dalla modalità e riprova |
 | *Nessun civico ANNCSU entro N m* | raggio troppo stretto o comune non ancora georiferito | allarga il raggio; se resta vuoto, il Comune non ha caricato le coordinate |
