@@ -429,7 +429,13 @@ quello sulla mappa è messo male, la cosa giusta è **trascinarlo** sul punto co
 
 Il confronto non guarda solo i segmenti che hai in lista: legge i civici di **tutti i tronconi della
 stessa via caricati nell'editor**. Serve perché un civico già presente spesso non sta sul pezzo che hai
-catturato, ma cento metri più avanti.
+catturato, ma cento metri più avanti. La riga sotto la legenda dice quanti civici stanno sul segmento in
+lista e quanti sugli altri tronconi.
+
+Un troncone è "della stessa via" quando il suo **nome principale** è quello dei segmenti in lista e il
+comune è lo stesso (o uno dei due è senza città). I **nomi alternativi non contano**: un vecchio nome o
+una sigla rimasti come alternativo non trasformano un'altra strada nella tua. I civici delle **altre vie**,
+anche a pochi metri (parallele, traverse, incroci), non vengono mai scambiati per doppioni.
 
 Il limite è che si vede solo ciò che l'editor ha **caricato in quel momento**. Per questo conviene
 lavorare per tratti brevi, da vicino, sul pezzo di strada che stai guardando: così il confronto è
@@ -446,8 +452,31 @@ Il controllo sui civici già presenti è doppio:
 2. **stesso numero sulla stessa strada ma oltre 40 m** → *già su Waze ma posizionato male*, riga
    arancione con la distanza (`già su Waze ma a ~120 m: da spostare, non da aggiungere`).
 
+Passando il mouse sulla riga, il tooltip dice **dove** sta il civico trovato (via e segmento): se una
+segnalazione ti sembra sbagliata la verifichi in un attimo.
+
 Il controllo guarda **solo i civici della stessa via** (segmenti in lista e altri tronconi caricati
-con la stessa strada): un `5` di una via vicina non fa scattare nulla.
+con lo stesso nome principale): un `5` di una via vicina non fa scattare nulla, nemmeno a pochi metri.
+
+### Aggancio del civico alla sua via
+
+Per Waze un civico appartiene alla via del **segmento a cui è agganciato**, non a quella su cui lo vedi
+disegnato. Dalla 0.3.4 lo script aggancia ogni civico **solo** a un segmento della sua via caricato
+nell'editor: se il segmento giusto non è caricato, il civico non viene inserito e il riepilogo ti dice
+di avvicinarti alla strada. Fino alla 0.3.3, in quel caso, lasciava scegliere al WME il segmento più
+vicino di qualsiasi via, e agli incroci un civico poteva finire sulla traversa.
+
+Due regole in più proteggono ogni via dalle altre:
+
+- **lista con più vie**: se in lista hai segmenti di vie diverse e lo script non riesce a capire con
+  certezza quale stai numerando, non apre l'elenco e non inserisce nulla; ti chiede di tenere in lista
+  solo i segmenti di quella via;
+- **controllo finale**: un attimo prima di scrivere ogni civico, lo script ricontrolla da capo che il
+  segmento sia della via (stesso nome principale, comune compatibile). Se non lo è, il civico non viene
+  scritto e il riepilogo lo dice.
+
+Ogni civico va sul troncone **più vicino della sua via**; i civici e i segmenti delle altre vie non
+vengono mai toccati.
 
 **Cosa fare:** apri il civico che c'è già e **trascinalo** sul punto corretto. È l'unica strada giusta:
 Waze accetta **un solo punto per numero** sulla stessa via, quindi aggiungerne un secondo non
@@ -466,7 +495,8 @@ d'archivio. Sulla mappa le etichette si stampano una sopra l'altra e diventano i
 `52/A` che si accavallano in un unico blocco nero), e su Waze due civici sovrapposti restano comunque
 un errore.
 
-Lo script raggruppa i civici che distano **meno di 1,5 m** fra loro e li presenta così:
+Lo script raggruppa **solo** i civici che l'archivio mette sulla **stessa identica coordinata**
+(confronto esatto, nessuna soglia in metri) e li presenta così:
 
 - riga **viola**, con la nota `N civici sulla stessa coordinata: scegli quelli veri, poi vanno spostati`;
 - **tutto il gruppo arriva senza spunta**, nessuno viene inserito di iniziativa dello script;
@@ -476,8 +506,9 @@ Lo script raggruppa i civici che distano **meno di 1,5 m** fra loro e li present
 - al termine dell'inserimento il riepilogo lo ripete, dicendoti quanti civici sono nati sullo stesso
   punto e vanno separati.
 
-> I civici semplicemente **vicini** (due portoni a 4–6 m, normali in centro storico) non finiscono qui:
-> restano righe indipendenti e spuntate.
+> I civici semplicemente **vicini** non finiscono qui, nemmeno se stanno a un metro l'uno dall'altro
+> (normale in centro storico): restano righe indipendenti e spuntate. Fino alla 0.3.3 la soglia era
+> 1,5 m e marcava per errore portoni distinti che sulla mappa si vedono separati.
 
 **Cosa fare:** clicca la riga per centrare la mappa sul punto e guarda il posto su Street View.
 

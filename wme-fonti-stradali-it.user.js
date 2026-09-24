@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.3.3
+// @version      0.3.4
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       Francesco Conforti (checcoconf)
 // @copyright    2026 Francesco Conforti
@@ -4316,6 +4316,12 @@
     // Traduce gli errori del WME in indicazioni azionabili
     function niceReason(msg) {
         const m = String(msg || 'errore');
+        if (m.indexOf('WFIT segmento di un\'altra via') >= 0) {
+            return 'il segmento pi\u00f9 vicino non \u00e8 di questa via: civico non inserito per non agganciarlo alla via sbagliata';
+        }
+        if (m.indexOf('WFIT segmento della via non caricato') >= 0) {
+            return 'segmento della via non caricato nell\'editor, civico non inserito per non agganciarlo a un\'altra via: avvicinati alla strada (o riduci lo zoom finch\u00e9 la vedi tutta) e ripremi il bottone';
+        }
         if (/projected segment|not allowed to add a house number|point is a required/i.test(m)) {
             return 'segmento con modifiche non salvate: salva (Ctrl+S) e ripremi il bottone';
         }
@@ -4333,20 +4339,26 @@
         : ['warn', '\u26a0\ufe0f formato non accettato da Waze: va inserito a mano'];
 
     const HN_MAX_D = 45; // Waze rifiuta i civici troppo lontani dal segmento: oltre questo limite si salta
-    // Soglia dei civici "sovrapposti": deliberatamente strettissima. Serve a prendere SOLO i punti
-    // che stanno sulla stessa identica coordinata (l'archivio arrotonda a 5-6 decimali, cioe' circa
-    // un metro), non i vicini di casa: in centro due portoni distinti stanno spesso a 4-6 m e
-    // accorparli vorrebbe dire far perdere civici veri.
-    const HN_OVERLAP_D = 1.5;
-    const HN_OVERLAP_TXT = String(HN_OVERLAP_D).replace('.', ',');
+    // Civici "sovrapposti": SOLO quelli che l'archivio mette sulla stessa identica coordinata.
+    // Niente soglia in metri: le coordinate stanno in memoria in Float32, che in Italia arrotonda la
+    // latitudine a gradini di ~42 cm, quindi una distanza sotto il metro misurata qui puo' sbagliare
+    // di quasi mezzo metro in un senso o nell'altro. Il confronto esatto invece e' affidabile: la
+    // stessa coordinata dell'archivio da' sempre lo stesso valore in memoria, e due portoni distinti
+    // (anche a un metro) danno sempre valori diversi. Fino alla 0.3.3 la soglia era 1,5 m e in centro
+    // storico marcava come sovrapposti civici che sulla mappa si vedono separati (0.3.4).
+    const HN_OVERLAP_TXT = 'stesso punto esatto dell\'archivio';
     const HN_SAME_D = 40;   // entro questa distanza consideriamo che sia lo stesso civico
     const HN_SAME_DEG = 6e-4; // pre-filtro grossolano prima della distanza vera (evita mille haversine)
 
     // Il civico numero X esiste gia' su Waze qui vicino? Unico posto in cui si decide.
+    // Si ignorano i civici che stanno su un segmento di un'ALTRA via (h.altra): in centro le
+    // parallele e le traverse corrono spesso a 20-40 m, e il "5" della via accanto finiva per
+    // marcare "gia' su Waze" il 5 di questa. Piu' vie del paese erano gia' numerate, piu'
+    // falsi doppioni comparivano (0.3.4).
     function findExistingHN(existing, label, lon, lat, nr) {
         if (!existing || !existing.length) return null;
         const k = hnKey(label, nr);
-        return existing.find(h => !h.rpp && hnKey(h.num, nr) === k &&
+        return existing.find(h => !h.rpp && !h.altra && hnKey(h.num, nr) === k &&
             Math.abs(h.c[0] - lon) < HN_SAME_DEG && Math.abs(h.c[1] - lat) < HN_SAME_DEG &&
             haversine(h.c[0], h.c[1], lon, lat) < HN_SAME_D) || null;
     }
@@ -4375,27 +4387,20 @@
     // due punti sovrapposti sono comunque un errore. Qui si marcano a gruppi: l'elenco li
     // presenta tutti senza spunta e ne fa scegliere UNO solo.
     function markOverlaps(list) {
-        for (const p of list) { p.ovl = 0; p.ovlN = 0; }
-        let g = 0;
-        for (let i = 0; i < list.length; i++) {
-            const a = list[i];
-            for (let j = i + 1; j < list.length; j++) {
-                const b = list[j];
-                // pre-filtro grossolano: ~3 m di lato, evita di calcolare mille distanze vere
-                if (Math.abs(a.lon - b.lon) > 3e-5 || Math.abs(a.lat - b.lat) > 3e-5) continue;
-                if (haversine(a.lon, a.lat, b.lon, b.lat) > HN_OVERLAP_D) continue;
-                if (a.ovl && b.ovl) {
-                    if (a.ovl === b.ovl) continue;
-                    const vecchio = b.ovl; // due gruppi che si toccano diventano uno solo
-                    for (const x of list) if (x.ovl === vecchio) x.ovl = a.ovl;
-                } else if (a.ovl) b.ovl = a.ovl;
-                else if (b.ovl) a.ovl = b.ovl;
-                else { a.ovl = b.ovl = ++g; }
-            }
+        const perPunto = new Map();   // coordinata esatta -> civici in quel punto
+        for (const p of list) {
+            p.ovl = 0; p.ovlN = 0;
+            if (!isFinite(p.lon) || !isFinite(p.lat)) continue;
+            const k = p.lon + '|' + p.lat;
+            const a = perPunto.get(k);
+            if (a) a.push(p); else perPunto.set(k, [p]);
         }
-        const n = new Map();
-        for (const p of list) if (p.ovl) n.set(p.ovl, (n.get(p.ovl) || 0) + 1);
-        for (const p of list) if (p.ovl) p.ovlN = n.get(p.ovl);
+        let g = 0;
+        for (const a of perPunto.values()) {
+            if (a.length < 2) continue;
+            g++;
+            for (const p of a) { p.ovl = g; p.ovlN = a.length; }
+        }
         return g;
     }
 
@@ -4490,52 +4495,139 @@
     }
 
     // Civici gia' presenti su Waze: prova a caricarli davvero (SDK per-segmento, store, legacy)
-    // Tutti i segmenti CARICATI che appartengono alla stessa via di quelli in lista.
-    // I civici gia' su Waze non stanno per forza sul pezzo che hai catturato: il "5" puo'
-    // trovarsi cento metri piu' avanti, su un altro troncone dello stesso odonimo (o su una
-    // carreggiata gemella). Chiedendo i civici solo per i segmenti in lista non lo si vedeva
-    // e il doppione passava. Il legame e' l'ID della strada (primario o alternativo), non il
-    // nome scritto: cosi' due vie omonime in comuni diversi restano separate.
-    // Limite noto: si vede solo cio' che l'editor ha caricato (SDK Segments.getAll).
-    function sameStreetSegmentIds() {
-        const ids = new Set([...captured.keys()]);
-        const streets = new Set();
+    // Chiave di confronto dei nomi: minuscolo, senza accenti, solo lettere e cifre
+    const chiaveNome = n => deacc(String(n == null ? '' : n)).replace(/[^a-z0-9]+/g, '');
+
+    // Nome e comune (come chiavi) di una strada del WME. Comune '' = strada senza citta'.
+    function infoStrada(id) {
+        if (id == null) return null;
+        try {
+            const st = sdk.DataModel.Streets.getById({ streetId: Number(id) });
+            if (!st) return null;
+            return { nome: chiaveNome(st.name), citta: st.cityId != null ? chiaveNome(cityNameById(st.cityId)) : '' };
+        } catch { return null; }
+    }
+
+    // La via su cui stai lavorando, definita dai NOMI PRINCIPALI dei segmenti in lista.
+    // Un civico su Waze appartiene alla via principale del suo segmento: i nomi alternativi
+    // NON legano due strade. Fino alla 0.3.3 bastava un alternativo in comune (vecchio nome,
+    // sigla, nome senza citta') per far diventare "di questa via" tutti i civici di un'altra
+    // strada, che poi comparivano come "gia' su Waze" o "posizionati male" (0.3.4).
+    // odonimo: la via ANNCSU in revisione. Se la lista contiene segmenti di piu' vie, si tengono
+    // solo quelli con quel nome; se nessuno lo ha (nome scritto in modo diverso) si tengono tutti.
+    function viaDiLavoro(odonimo) {
+        const seed = [];
         for (const id of captured.keys()) {
-            try {
-                const seg = sdk.DataModel.Segments.getById({ segmentId: id });
-                if (!seg) continue;
-                if (seg.primaryStreetId != null) streets.add(seg.primaryStreetId);
-                for (const a of (seg.alternateStreetIds || [])) if (a != null) streets.add(a);
-            } catch { /* prossimo */ }
+            let seg = null;
+            try { seg = sdk.DataModel.Segments.getById({ segmentId: Number(id) }); } catch { /* non caricato */ }
+            seed.push({ id, seg, pi: seg ? infoStrada(seg.primaryStreetId) : null });
         }
-        if (!streets.size) return [...ids];
+        const ko = chiaveNome(odonimo);
+        let base = seed;
+        if (ko) {
+            const m = seed.filter(x => x.pi && x.pi.nome === ko);
+            if (m.length && m.length < seed.filter(x => x.pi && x.pi.nome).length) {
+                // i segmenti in lista non caricati non si possono verificare: restano, tanto dal
+                // WME non se ne leggono civici
+                base = seed.filter(x => !x.seg || (x.pi && x.pi.nome === ko));
+            }
+        }
+        const nomi = new Set(), citta = new Set();
+        for (const x of base) {
+            if (!x.pi || !x.pi.nome) continue;
+            nomi.add(x.pi.nome);
+            if (x.pi.citta) citta.add(x.pi.citta);
+            // regola "fuori centro": principale senza citta' + alternativo uguale con citta'
+            for (const a of (x.seg.alternateStreetIds || [])) {
+                const ai = infoStrada(a);
+                if (ai && ai.nome === x.pi.nome && ai.citta) citta.add(ai.citta);
+            }
+        }
+        // stesso nome principale e comune compatibile (uno dei due senza citta' = compatibile)
+        const stessaVia = seg => {
+            if (!seg || !nomi.size) return false;
+            const pi = infoStrada(seg.primaryStreetId);
+            if (!pi || !pi.nome || !nomi.has(pi.nome)) return false;
+            return !pi.citta || !citta.size || citta.has(pi.citta);
+        };
+        // l'alternativo di un altro segmento ha il nostro nome: non e' la nostra via, ma nel
+        // dubbio un civico li' vicino non si considera "di un'altra via"
+        const nomeAlternativo = seg => !!seg && (seg.alternateStreetIds || []).some(a => { const ai = infoStrada(a); return !!(ai && ai.nome && nomi.has(ai.nome)); });
+        // Lista con segmenti di piu' vie e nessuno col nome della via in revisione: non si sa quale
+        // stai numerando. Chi inserisce i civici si ferma, per non agganciarli alla via sbagliata.
+        const nomiLeggibili = [...new Set(base.filter(x => x.pi && x.pi.nome).map(x => x.pi.nome))];
+        const ambigua = nomiLeggibili.length > 1
+            ? [...new Set(base.filter(x => x.pi && x.pi.nome).map(x => streetNameById(x.seg.primaryStreetId)))]
+            : null;
+        return { segIds: base.map(x => x.id), nomi, citta, stessaVia, nomeAlternativo, esclusi: seed.length - base.length, ambigua };
+    }
+
+    // Tutti i segmenti CARICATI che appartengono alla via su cui stai lavorando.
+    // I civici gia' su Waze non stanno per forza sul pezzo che hai catturato: il "5" puo'
+    // trovarsi cento metri piu' avanti, su un altro troncone della stessa via (o su una
+    // carreggiata gemella). Chiedendo i civici solo per i segmenti in lista non lo si vedeva
+    // e il doppione passava. Il legame e' il nome principale del segmento (vedi viaDiLavoro).
+    // Limite noto: si vede solo cio' che l'editor ha caricato (SDK Segments.getAll).
+    function sameStreetSegmentIds(odonimo, via) {
+        via = via || viaDiLavoro(odonimo);
+        const ids = new Set(via.segIds);
+        if (!via.nomi.size) return [...ids];
         try {
             for (const seg of (sdk.DataModel.Segments.getAll() || [])) {
                 if (!seg || ids.has(seg.id)) continue;
                 // hasHouseNumbers === false = il segmento non ne ha: inutile chiederglieli
                 if (seg.hasHouseNumbers === false) continue;
-                const stessa = (seg.primaryStreetId != null && streets.has(seg.primaryStreetId)) ||
-                    (seg.alternateStreetIds || []).some(a => streets.has(a));
-                if (stessa) ids.add(seg.id);
+                if (via.stessaVia(seg)) ids.add(seg.id);
                 if (ids.size >= 400) break; // una via lunghissima non deve bloccare il pannello
             }
         } catch { /* restano i segmenti in lista */ }
         return [...ids];
     }
 
-    async function loadExistingHNs() {
+    async function loadExistingHNs(odonimo) {
         const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
         const out = [];
+        // La memoria dei civici inseriti serve solo finche' ci sono modifiche da salvare: dopo
+        // un salvataggio i civici arrivano dal WME, dopo un annulla o uno scarta modifiche non
+        // esistono piu'. Tenerla oltre faceva risultare "gia' su Waze" civici mai salvati (0.3.4).
+        if (civiciInseriti.length && unsavedCount() === 0) {
+            log(`memoria civici inseriti azzerata: nessuna modifica da salvare (${civiciInseriti.length} voci)`);
+            civiciInseriti = [];
+        }
         // "mio" = civico che sta su un segmento DELLA STESSA VIA, non solo su quelli catturati
-        const viaIds = sameStreetSegmentIds();
+        const via = viaDiLavoro(odonimo);
+        const viaIds = sameStreetSegmentIds(odonimo, via);
         const capIds = new Set(viaIds.map(String));
+        const segCache = new Map();
+        const segDi = sid => {
+            const k = String(sid);
+            if (!segCache.has(k)) {
+                let sg = null;
+                try { sg = sdk.DataModel.Segments.getById({ segmentId: Number(sid) }); } catch { sg = null; }
+                segCache.set(k, sg || null);
+            }
+            return segCache.get(k);
+        };
+        // true SOLO se il civico sta su un segmento caricato la cui via principale e' con certezza
+        // un'altra; se non si sa (segmento ignoto, non caricato, senza nome) resta false. Nel dubbio
+        // resta false anche se quel segmento ha il nostro nome fra gli alternativi.
+        const suAltraVia = sid => {
+            if (sid == null || capIds.has(String(sid))) return false;
+            const sg = segDi(sid);
+            if (!sg) return false;
+            const pi = infoStrada(sg.primaryStreetId);
+            if (!pi || !pi.nome) return false;
+            return !via.stessaVia(sg) && !via.nomeAlternativo(sg);
+        };
         // Serve a distinguere il numero 5 di QUESTA via da un 5 qualsiasi caricato in zona su
         // un'altra strada: solo il primo e' un doppione, anche se il punto e' lontano.
         const segIdOf = h => (h.segmentId != null ? h.segmentId : (h.segID != null ? h.segID : h.segmentID));
+        // Il segmento dichiarato dal civico vale piu' della sorgente: anche quando si chiedono i
+        // civici dei soli segmenti della via, si controlla che siano davvero li' (0.3.4)
         const isOwn = (h, forced) => {
-            if (forced) return true;
             const sid = segIdOf(h);
-            return sid != null && capIds.has(String(sid));
+            if (sid != null) return capIds.has(String(sid));
+            return !!forced;
         };
         const push = (h, forced) => {
             if (!h) return;
@@ -4545,7 +4637,9 @@
             // il modello interno del WME tiene le coordinate in metri (Mercator)
             if (!c && h.geometry && h.geometry.x != null && h.geometry.y != null) c = merc2wgs(h.geometry.x, h.geometry.y);
             if (num == null || !c || c.length < 2) return;
-            out.push({ num: String(num), c: [c[0], c[1]], own: isOwn(h, forced) });
+            const own = isOwn(h, forced);
+            const sid = segIdOf(h);
+            out.push({ num: String(num), c: [c[0], c[1]], own, altra: !own && suAltraVia(sid), sid: sid != null ? sid : null });
         };
         // getHouseNumbers puo' rispondere sincrona o con una promessa, a seconda della versione
         const collect = async (arg, forced) => {
@@ -4644,24 +4738,26 @@
             log(`civici esistenti: ${attesi} ${pl(attesi, 'segmento ha', 'segmenti hanno')} civici secondo il WME, ma non se n'e' letto nessuno`);
         }
         // ultima rete: quello che ha inserito lo script in questa sessione
-        const vieOra = viaStreetIds(viaIds);
+        // (legati al NOME della via su cui sono stati inseriti, non a tutta la lista di allora)
         for (const h of civiciInseriti) {
             const stessaVia = (h.segId != null && capIds.has(String(h.segId)))
-                || (h.streets && [...h.streets].some(x => vieOra.has(String(x))));
-            if (stessaVia) out.push({ num: h.num, c: h.c, own: true });
+                || (h.nomi && h.nomi.some(n => via.nomi.has(n)));
+            if (stessaVia) out.push({ num: h.num, c: h.c, own: true, sid: h.segId, memoria: true });
         }
-        lastHNScan = { hn: 0, segs: nums.length, rpp: 0, ok, come, scaricati, attesi };
+        lastHNScan = { hn: 0, segs: nums.length, rpp: 0, ok, come, scaricati, attesi, esclusi: via.esclusi };
         log(`civici gia' su Waze: ${out.length} utili su ${letti} letti, ${nums.length}/${viaIds.length} segmenti caricati della stessa via ` +
             `(${captured.size} in lista)${ok ? ' \u00b7 sorgente: ' + come : ' \u00b7 LETTURA NON RIUSCITA'}`);
         // Luoghi residenziali (RPP) della stessa via: per la guida un indirizzo gia' fatto come RPP
         // non va inserito anche come civico normale
         try {
-            const streets = viaStreetIds(viaIds);
             for (const v of (sdk.DataModel.Venues.getAll() || [])) {
                 if (!v || !v.isResidential) continue;
                 let ad = null;
                 try { ad = sdk.DataModel.Venues.getAddress({ venueId: v.id }); } catch { continue; }
-                if (!ad || !ad.houseNumber || !ad.street || !streets.has(String(ad.street.id))) continue;
+                if (!ad || !ad.houseNumber || !ad.street) continue;
+                // stessa via = stesso nome principale, comune compatibile (non basta un alternativo)
+                const si = infoStrada(ad.street.id);
+                if (!si || !si.nome || !via.nomi.has(si.nome) || (si.citta && via.citta.size && !via.citta.has(si.citta))) continue;
                 const c = venuePoint(v);
                 if (!c) continue;
                 out.push({ num: String(ad.houseNumber), c, own: true, rpp: true });
@@ -4673,26 +4769,31 @@
         for (const h of out) {
             const k = h.num + '|' + Math.round(h.c[0] * 1e5) + '|' + Math.round(h.c[1] * 1e5);
             const old = seen.get(k);
-            if (old) { if (h.own) old.own = true; continue; } // stesso civico letto da piu' sorgenti
+            if (old) { if (h.own) { old.own = true; old.altra = false; } if (old.sid == null && h.sid != null) old.sid = h.sid; continue; } // stesso civico letto da piu' sorgenti
             seen.set(k, h);
             uniq.push(h);
         }
         lastHNScan.hn = uniq.filter(h => h.own && !h.rpp).length;
+        // quanti stanno sui segmenti in lista e quanti sugli altri tronconi della via: la riga sotto
+        // la legenda lo dice, cosi' si capisce subito da dove arriva un "gia' su Waze" (0.3.4)
+        const inLista = new Set(via.segIds.map(String));
+        lastHNScan.inLista = uniq.filter(h => h.own && !h.rpp && (h.memoria || (h.sid != null && inLista.has(String(h.sid))))).length;
+        lastHNScan.tronconi = nums.filter(id => !inLista.has(String(id))).length;
+        // diagnostica: su quali segmenti stanno i civici considerati "di questa via"
+        const perSeg = {};
+        for (const h of uniq) if (h.own && !h.rpp) bump(perSeg, h.memoria ? 'memoria' : (h.sid != null ? h.sid : '?'));
+        if (lastHNScan.hn) log(`civici della via ${[...via.nomi].join('/') || '?'} per segmento: ${JSON.stringify(perSeg)}`);
         return uniq;
     }
 
-    // ID delle vie (primario e alternativi) dei segmenti indicati
-    function viaStreetIds(segIds) {
-        const out = new Set();
-        for (const id of segIds) {
-            try {
-                const seg = sdk.DataModel.Segments.getById({ segmentId: Number(id) });
-                if (!seg) continue;
-                if (seg.primaryStreetId != null) out.add(String(seg.primaryStreetId));
-                for (const a of (seg.alternateStreetIds || [])) if (a != null) out.add(String(a));
-            } catch { /* prossimo */ }
-        }
-        return out;
+    // Da dove viene un civico gia' su Waze: via del suo segmento e ID del segmento. Serve a far
+    // vedere all'utente COSA ha trovato il controllo, cosi' puo' verificarlo sulla mappa (0.3.4).
+    function origineCivico(h) {
+        if (h.memoria) return { via: 'inserito da te, non ancora salvato', dett: 'civico inserito in questa sessione e non ancora salvato' };
+        if (h.sid == null) return { via: 'segmento non indicato', dett: 'il WME non ha indicato su quale segmento sta questo civico' };
+        let via = '';
+        try { const sg = sdk.DataModel.Segments.getById({ segmentId: Number(h.sid) }); if (sg && sg.primaryStreetId != null) via = streetLabel(sg.primaryStreetId); } catch { /* sotto */ }
+        return { via: via || 'segmento ' + h.sid, dett: `${via ? via + ', ' : ''}segmento ${h.sid}` };
     }
 
     // Punto di un luogo: il punto stesso, o il centro del poligono
@@ -4731,16 +4832,20 @@
             try {
                 const seg = sdk.DataModel.Segments.getById({ segmentId: Number(id) });
                 if (!seg) continue;
+                // solo il nome PRINCIPALE: con gli alternativi (vecchi nomi, sigle) un segmento di
+                // un'altra strada finiva fra i "nostri" e il civico ci si poteva agganciare (0.3.4)
                 if (seg.primaryStreetId != null) add(streetNameById(seg.primaryStreetId));
-                for (const a of (seg.alternateStreetIds || [])) if (a != null) add(streetNameById(a));
             } catch { /* prossimo */ }
         }
         return out;
     }
 
     function hnSegmentContext(odonimo) {
-        const viaIds = new Set(sameStreetSegmentIds().map(String));
+        const via = viaDiLavoro(odonimo);
+        const viaIds = new Set(sameStreetSegmentIds(odonimo, via).map(String));
         const nomiVia = nomiDellaVia(viaIds, odonimo);
+        // stesso nome ma in un ALTRO comune (via omonima oltre il confine) non e' la nostra via
+        const cittaOk = sg => { const pi = infoStrada(sg.primaryStreetId); return !pi || !pi.citta || !via.citta.size || via.citta.has(pi.citta); };
         const stessoNome = n => {
             const k = deacc(String(n || '')).replace(/[^a-z0-9]+/g, '');
             return !!k && nomiVia.has(k);
@@ -4755,13 +4860,16 @@
             if (sg.primaryStreetId == null || sg.isDrivable === false || sg.roadType === RT_RAMP) continue;
             // stesso nome = stessa via, anche se l'ID della strada e' diverso (citta' diversa,
             // frazione, troncone creato a parte): va fra i "nostri", non fra gli accessi altrui
-            if (stessoNome(streetNameById(sg.primaryStreetId))) { own.push({ id: sg.id, c }); continue; }
+            if (stessoNome(streetNameById(sg.primaryStreetId)) && cittaOk(sg)) { own.push({ id: sg.id, c }); continue; }
             other.push({ id: sg.id, c, street: sg.primaryStreetId });
         }
         // i segmenti della lista non piu' caricati entrano solo come geometria (id a null):
         // servono a capire la distanza, ma non si possono usare per agganciare il civico
         for (const [id, v] of captured) {
             if (!v || !v.coords || v.coords.length < 2) continue;
+            // solo i segmenti in lista che sono di QUESTA via: un segmento di un'altra via finito in
+            // lista non deve diventare un posto dove agganciare i civici (0.3.4)
+            if (!viaIds.has(String(id))) continue;
             if (own.some(o => sameId(o.id, id))) continue;
             own.push({ id: segmentoCaricato(id) ? id : null, c: v.coords });
         }
@@ -5045,7 +5153,7 @@
                 + 'Se sul posto il civico \u00e8 davvero questo, va inserito a mano seguendo la guida Numeri civici della Wazeopedia. '
                 + 'Se hai verificato che il numero giusto \u00e8 un altro, correggilo nella casella e spuntalo.'
             : p.ovl
-            ? `Questo civico sta sulla stessa coordinata di altri ${p.ovlN - 1} (meno di ${HN_OVERLAP_TXT} m): sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono. Per questo il gruppo arriva senza spunta e la scelta la fai tu: guarda il posto su Street View e spunta quelli che esistono davvero \u2014 anche piu\' di uno, se sul posto ci sono davvero piu\' ingressi. Quelli che inserisci nascono tutti in questo punto: poi vanno TRASCINATI uno per uno sull\'ingresso giusto, prima di salvare. Clic sulla riga per centrare la mappa.`
+            ? `Questo civico sta sulla stessa coordinata di altri ${p.ovlN - 1} (${HN_OVERLAP_TXT}): sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono. Per questo il gruppo arriva senza spunta e la scelta la fai tu: guarda il posto su Street View e spunta quelli che esistono davvero \u2014 anche piu\' di uno, se sul posto ci sono davvero piu\' ingressi. Quelli che inserisci nascono tutti in questo punto: poi vanno TRASCINATI uno per uno sull\'ingresso giusto, prima di salvare. Clic sulla riga per centrare la mappa.`
             : p.dup
             ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
             : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18b).';
@@ -5399,7 +5507,7 @@
 
     // Annota i civici gia' presenti su Waze e toglie loro la spunta
     function annotateExistingHNs(ctx) {
-        return loadExistingHNs().then(ex => {
+        return loadExistingHNs(ctx.rName ? toWazeCase(ctx.rName) : '').then(ex => {
             try { annotateAccessStreet(ctx, hnSegmentContext(ctx.rName ? toWazeCase(ctx.rName) : '')); } catch (e) { log('controllo accessi KO', e); }
             const rppKeys = new Set(ex.filter(h => h.rpp).map(h => hnKey(h.num, ctx.nr)));
             // si dice sempre su cosa e' stato fatto il confronto: se la via e' lunga e ne hai
@@ -5407,7 +5515,8 @@
             if (ctx.scan) {
                 const rppTxt = lastHNScan.rpp ? `${lastHNScan.rpp} ${pl(lastHNScan.rpp, 'luogo residenziale', 'luoghi residenziali')} (RPP) sulla via \u00b7 ` : '';
                 const segTxt = `${lastHNScan.segs} ${pl(lastHNScan.segs, 'segmento', 'segmenti')} di questa via caricati nell'editor`
-                    + (lastHNScan.scaricati ? ` (${lastHNScan.scaricati} in lista ma non pi\u00f9 ${pl(lastHNScan.scaricati, 'caricato', 'caricati')})` : '');
+                    + (lastHNScan.scaricati ? ` (${lastHNScan.scaricati} in lista ma non pi\u00f9 ${pl(lastHNScan.scaricati, 'caricato', 'caricati')})` : '')
+                    + (lastHNScan.esclusi ? ` \u00b7 ${lastHNScan.esclusi} ${pl(lastHNScan.esclusi, 'segmento', 'segmenti')} di altre vie in lista non ${pl(lastHNScan.esclusi, 'considerato', 'considerati')}` : '');
                 ctx.scan.classList.toggle('wfit-scanbad', !lastHNScan.ok);
                 ctx.scan.textContent = !lastHNScan.ok
                     ? '\u26a0\ufe0f Su questa via ci sono gi\u00e0 dei civici, ma il tuo editor non me li fa leggere: non posso dirti quali numeri esistono di gi\u00e0. '
@@ -5416,7 +5525,10 @@
                             : 'Prova a ricaricare l\'editor e a riaprire l\'elenco. ')
                         + 'Se vai avanti cos\u00ec, guarda tu sulla mappa quali civici ci sono gi\u00e0: i doppioni verrebbero rifiutati al salvataggio.'
                     : rppTxt + (lastHNScan.hn
-                        ? `Confrontati con ${lastHNScan.hn} ${pl(lastHNScan.hn, 'civico gi\u00e0 su Waze', 'civici gi\u00e0 su Waze')} su ${segTxt}.`
+                        ? `Confrontati con ${lastHNScan.hn} ${pl(lastHNScan.hn, 'civico gi\u00e0 su Waze', 'civici gi\u00e0 su Waze')} su ${segTxt}`
+                            + (lastHNScan.tronconi && lastHNScan.inLista != null
+                                ? `: ${lastHNScan.inLista} sul segmento in lista, ${lastHNScan.hn - lastHNScan.inLista} ${pl(lastHNScan.tronconi, 'sull\'altro troncone', 'sugli altri ' + lastHNScan.tronconi + ' tronconi')} con lo stesso nome.`
+                                : '.')
                         : `Nessun civico gi\u00e0 su Waze sui ${segTxt}.`);
                 ctx.scan.title = (lastHNScan.ok ? '' : 'Il WME carica i numeri civici solo dallo zoom 18 in su e solo per la zona a schermo: '
                         + 'piu' + '\u00f9 lontano lo script non pu\u00f2 sapere quali esistono gi\u00e0.\n\n')
@@ -5450,8 +5562,10 @@
                     x.cb.checked = false;
                     x.p.wazeFar = null;
                     x.row.classList.add('wfit-hnwaze');
+                    const og = origineCivico(near);
+                    const dm = Math.round(haversine(near.c[0], near.c[1], x.p.lon, x.p.lat));
                     x.setNote('waze', 'gi\u00e0 su Waze, niente da fare');
-                    x.row.title = `Questo civico esiste gi\u00e0 sulla mappa a ${Math.round(haversine(near.c[0], near.c[1], x.p.lon, x.p.lat))} m da qui: `
+                    x.row.title = `Questo civico esiste gi\u00e0 sulla mappa a ${dm} m da qui (${og.dett}): `
                         + 'per questo arriva senza spunta. Se lo reinserisci, Waze lo rifiuta come duplicato. '
                         + 'Spuntalo solo se sei sicuro che quello esistente sia messo male e vuoi provare a correggerlo.'
                         + `\nCoordinate ANNCSU: ${x.p.lat.toFixed(6)}, ${x.p.lon.toFixed(6)}`;
@@ -5464,6 +5578,7 @@
                 x.cb.checked = false;
                 x.p.wazeFar = Math.round(far.d);
                 x.row.classList.add('wfit-hnmoved');
+                const ogF = origineCivico(far.hn);
                 x.setNote('moved', `gi\u00e0 su Waze ma a ~${Math.round(far.d)} m: da spostare, non da aggiungere`);
                 x.row.title = `Il civico ${label} esiste gi\u00e0 su questa strada, ma si trova a ~${Math.round(far.d)} m dal punto ANNCSU: `
                     + 'quasi sempre vuol dire che quello sulla mappa \u00e8 posizionato male. La cosa giusta \u00e8 '
@@ -5471,7 +5586,7 @@
                     + 'accetta un solo punto per numero e il doppione viene rifiutato al salvataggio. '
                     + 'Per questo la riga arriva senza spunta e, se la spunti, lo script ti chiede conferma.'
                     + `\nCoordinate ANNCSU: ${x.p.lat.toFixed(6)}, ${x.p.lon.toFixed(6)}`
-                    + `\nCoordinate del civico su Waze: ${far.hn.c[1].toFixed(6)}, ${far.hn.c[0].toFixed(6)}`;
+                    + `\nCivico su Waze: ${ogF.dett} \u00b7 coordinate ${far.hn.c[1].toFixed(6)}, ${far.hn.c[0].toFixed(6)}`;
                 moved++;
             }
             if (marked || rpp) ctx.addLegend('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
@@ -5495,6 +5610,11 @@
         }
         if (capturedHaveNamedStreet() === false) {
             toast('Questi segmenti sono "Senza strada": i numeri civici si possono inserire SOLO su strade con il nome della via. Prima premi "Applica ai segmenti" e salva, poi riapri l\'elenco dei civici.', 11000);
+            return;
+        }
+        const ambR = viaDiLavoro(r && r.name ? toWazeCase(r.name) : '').ambigua;
+        if (ambR) {
+            toast(`In lista ci sono segmenti di pi\u00f9 vie (${ambR.join(', ')}): per i civici tieni in lista solo i segmenti della via che stai numerando.`, 11000);
             return;
         }
         const cand = hnCandidates(r);
@@ -5528,7 +5648,7 @@
         if (nOverlap) {
             ctx.addLegend('<span class="wfit-swatch wfit-sw-ovl"></span> stessa coordinata, da spostare dopo');
             const nPunti = shown.filter(p => p.ovl).length;
-            toast(`${nPunti} civici stanno sulla stessa coordinata di ${pl(nOverlap, 'un altro', 'altri')} (${nOverlap} ${pl(nOverlap, 'gruppo', 'gruppi')}, meno di ${HN_OVERLAP_TXT} m): `
+            toast(`${nPunti} civici stanno sulla stessa coordinata di ${pl(nOverlap, 'un altro', 'altri')} (${nOverlap} ${pl(nOverlap, 'gruppo', 'gruppi')}, ${HN_OVERLAP_TXT}): `
                 + 'sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono, quindi li ho lasciati tutti senza spunta. '
                 + 'Controlla su Street View e spunta quelli che esistono davvero, anche piu\' di uno: '
                 + 'nascono in questo punto e poi li trascini sugli ingressi giusti prima di salvare. '
@@ -5547,32 +5667,35 @@
     // addHouseNumber({ number, point, segmentId }): con segmentId il civico si aggancia al
     // segmento della sua via; senza, l'SDK userebbe il segmento piu' vicino, che su un
     // civico d'angolo puo' essere la traversa.
-    function makeHouseNumberAdder(HN) {
+    const ERR_NOSEG = 'WFIT segmento della via non caricato';
+    const ERR_ALTRAVIA = 'WFIT segmento di un\'altra via';
+    function makeHouseNumberAdder(HN, ammessi) {
+        // Il civico si inserisce SOLO agganciato a un segmento della sua via caricato nell'editor.
+        // Fino alla 0.3.3, se il segmento non era caricato si lasciava scegliere al WME, che prende
+        // il segmento piu' vicino di QUALSIASI via: agli incroci il civico finiva sulla traversa (per
+        // Waze diventava un civico di quella via) e poi bloccava come doppione lo stesso numero
+        // della via vera. Meglio un civico non inserito, con il motivo, che uno sulla via sbagliata.
+        // ammessi: gli ID dei segmenti della via su cui stai lavorando. Ultimo controllo prima della
+        // scrittura: qualunque strada abbia fatto il civico per arrivare qui, se il segmento non e'
+        // della sua via non si scrive.
         return (num, pt, segId) => {
-            const args = { number: num, point: { type: 'Point', coordinates: pt } };
-            // segmentId solo se quel segmento e' davvero nel modello adesso
-            if (segId != null && segmentoCaricato(segId)) args.segmentId = Number(segId);
-            try { HN.addHouseNumber(args); }
-            catch (e) {
-                // l'id era gia' sparito fra il controllo e la chiamata: si lascia scegliere
-                // il segmento al WME, che prende il piu' vicino
-                if (args.segmentId == null || !/not found in data model/i.test(errText(e))) throw e;
-                log('civico', num, ': segmento', args.segmentId, 'non piu\' caricato, aggancio automatico');
-                HN.addHouseNumber({ number: num, point: { type: 'Point', coordinates: pt } });
-            }
+            if (segId == null || !segmentoCaricato(segId)) throw new Error(ERR_NOSEG);
+            if (ammessi && !ammessi.has(String(segId))) throw new Error(ERR_ALTRAVIA);
+            HN.addHouseNumber({ number: num, point: { type: 'Point', coordinates: pt }, segmentId: Number(segId) });
         };
     }
 
     // Inserisce l'elenco confermato, tenendo da parte i rifiuti da "segmento proiettato"
-    function ricordaInserito(p, streets) {
-        civiciInseriti.push({ segId: p.segId != null ? p.segId : null, num: String(p.label), c: [p.lon, p.lat], streets: streets || null });
+    // nomi: i nomi principali della via su cui e' stato inserito (vedi viaDiLavoro)
+    function ricordaInserito(p, nomi) {
+        civiciInseriti.push({ segId: p.segId != null ? p.segId : null, num: String(p.label), c: [p.lon, p.lat], nomi: nomi || [] });
         if (civiciInseriti.length > 3000) civiciInseriti.splice(0, civiciInseriti.length - 3000);
     }
 
     async function insertHouseNumbers(list, addOne, existing, tally, rec) {
         // le vie dei segmenti in lista: servono a ricordare i civici inseriti anche quando
         // il segmento non e' piu' caricato
-        const vieLista = viaStreetIds(sameStreetSegmentIds());
+        const nomiVia = [...viaDiLavoro(tally.odonimo || '').nomi];
         // Ultimo filtro prima di scrivere sulla mappa: un numero che su questa via esiste gia'
         // NON viene inserito, in nessun caso. Waze accetta un solo punto per numero, e un
         // doppione verrebbe rifiutato al salvataggio o creerebbe confusione.
@@ -5595,7 +5718,7 @@
             }
             try {
                 addOne(p.label, [p.lon, p.lat], p.segId);
-                ricordaInserito(p, vieLista);
+                ricordaInserito(p, nomiVia);
                 tally.ok++;
                 if (p.stack) tally.stacked++;
                 rec(p, 'inserito', '');
@@ -5629,7 +5752,7 @@
         ];
         await panTo(mid);
         for (const p of retry) {
-            try { addOne(p.label, [p.lon, p.lat], p.segId); ricordaInserito(p, viaStreetIds(sameStreetSegmentIds())); tally.ok++; rec(p, 'inserito', 'riuscito al secondo tentativo'); }
+            try { addOne(p.label, [p.lon, p.lat], p.segId); ricordaInserito(p, [...viaDiLavoro(tally.odonimo || '').nomi]); tally.ok++; rec(p, 'inserito', 'riuscito al secondo tentativo'); }
             catch (e) {
                 const m = errText(e);
                 if (isProjectedError(m)) tally.projFails.push(p);
@@ -5718,14 +5841,25 @@
         suppressUntil = Date.now() + 4000;
         try {
             // civici gia' presenti su Waze (caricati per davvero, quando possibile)
-            const existing = await loadExistingHNs();
-            const addOne = makeHouseNumberAdder(HN);
+            const odoIns = r && r.name ? toWazeCase(r.name) : '';
+            const amb = viaDiLavoro(odoIns).ambigua;
+            if (amb) {
+                toast(`Nessun civico inserito: in lista ci sono segmenti di pi\u00f9 vie (${amb.join(', ')}). Tieni in lista solo i segmenti della via che stai numerando e riprova.`, 12000);
+                return;
+            }
+            const existing = await loadExistingHNs(odoIns);
             // civici senza segmento assegnato (righe aggiunte a mano, elenco non ancora annotato)
-            const segCtx = hnSegmentContext(r && r.name ? toWazeCase(r.name) : '');
+            const segCtx = hnSegmentContext(odoIns);
+            // segmenti ammessi calcolati da capo, indipendenti da come e' stato scelto il segmento:
+            // solo quelli caricati con il nome principale della via (e comune compatibile)
+            const viaIns = viaDiLavoro(odoIns);
+            let caricatiOra = [];
+            try { caricatiOra = sdk.DataModel.Segments.getAll() || []; } catch { caricatiOra = []; }
+            const addOne = makeHouseNumberAdder(HN, new Set(caricatiOra.filter(sg => viaIns.stessaVia(sg)).map(sg => String(sg.id))));
             for (const p of list) {
                 if (p.segId == null) { const o = nearestSeg(segCtx.own, p.lon, p.lat); p.segId = o ? o.id : null; }
             }
-            const tally = { ok: 0, dup: 0, moved: 0, stacked: 0, reasons: {}, projFails: [] };
+            const tally = { ok: 0, dup: 0, moved: 0, stacked: 0, reasons: {}, projFails: [], odonimo: r && r.name ? toWazeCase(r.name) : '' };
             resetSegsPerLog();
             const rec = (p, esito, motivo) => {
                 const segId = segmentoDelPunto(p.lon, p.lat);
