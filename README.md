@@ -67,7 +67,7 @@ si disegna niente sulla mappa.
    livello e un identificativo di sessione (l'SDK del WME non espone più l'id numerico dell'utente).
 3. Se sei in elenco, il pannello si apre e tutte le funzioni si attivano.
 4. Se non lo sei, il pannello mostra **401 Unauthorized** con il tuo nome utente e il motivo, più il
-   bottone **"Ho ricevuto l'abilitazione: ricontrolla"** per rifare la verifica al volo.
+   pulsante **"Ho ricevuto l'abilitazione: ricontrolla"** per rifare la verifica al volo.
 
 **Tempi e casi limite**
 
@@ -110,13 +110,13 @@ Sezione **Dati ANNCSU** del pannello.
 | **Aggiorna** | riscarica solo le regioni che hai già in locale |
 | **Svuota dati** | cancella tutte le regioni salvate e riparte da zero |
 
-Durante uno scarico multiplo il bottone diventa **Ferma**: il ciclo si interrompe alla fine della
+Durante uno scarico multiplo il pulsante diventa **Ferma**: il ciclo si interrompe alla fine della
 regione in corso, senza lasciare dati a metà.
 
 **Freschezza dei dati.** ANNCSU aggiorna i dataset regionali con **cadenza mensile**, e in questo
 periodo i Comuni stanno completando la georeferenziazione dei civici: un giro ogni **4–6 settimane**
 può far comparire strade e numeri prima assenti. Il pannello scrive sempre da quanti giorni hai
-scaricato ogni regione e, superati i **35 giorni**, il bottone *Aggiorna* si accende di verde. È solo
+scaricato ogni regione e, superati i **35 giorni**, il pulsante *Aggiorna* si accende di verde. È solo
 un promemoria: **lo script non riscarica mai da solo**.
 
 **Controlli automatici sulla qualità.** Al termine dell'analisi lo script verifica la colonna
@@ -258,7 +258,7 @@ Per ogni odonimo trovato compare una scheda con:
   la **data del dataset** ANNCSU da cui provengono;
 - il **pallino colorato** che corrisponde ai punti disegnati sulla mappa;
 - la spunta **✓ nome principale già così su N di M segmenti** quando su Waze c'è già il nome proposto;
-- i bottoni **Copia**, **Applica ai segmenti**, **+N civici su Waze**.
+- i pulsanti **Copia**, **Applica ai segmenti**, **+N civici su Waze**.
 
 In testa ai risultati la riga **Su Waze ora** dice come sono scritti adesso i segmenti in lista
 (es. `Via Roma, Andria (4) · (senza strada) (1)`), così vedi subito se c'è qualcosa da fare.
@@ -341,7 +341,7 @@ Poi **salva** (Ctrl+S).
 
 ## 9 · Inserimento dei numeri civici
 
-Il bottone **+N civici su Waze** apre l'**elenco di controllo**: nulla viene scritto sulla mappa
+Il pulsante **+N civici su Waze** apre l'**elenco di controllo**: nulla viene scritto sulla mappa
 finché non confermi.
 
 **Prerequisiti:** una strada **con nome** e **nessuna modifica pendente** (il WME vieta di aggiungere
@@ -392,7 +392,7 @@ lo ricorda e basta riscaricarle.
 | Riga con bordo **rosso** | numero in un **formato che Waze non accetta** (`20/1`, `12/BIS`) → vedi sotto |
 | Riga esclusa | oltre **45 m** dalla strada: Waze la rifiuterebbe, va inserita a mano |
 
-Un clic sulla riga **centra la mappa** su quel civico; il bottone con l'**occhio** apre direttamente **Street View**
+Un clic sulla riga **centra la mappa** su quel civico; il pulsante con l'**occhio** apre direttamente **Street View**
 su quel punto. Al contrario, un clic su un **pallino sulla mappa** evidenzia la sua riga nell'elenco.
 
 **RPP** è il *Residential Point Place*: un Place residenziale con via e numero civico, e il punto di
@@ -402,7 +402,7 @@ normale.
 
 ### Creare un RPP
 
-Il bottone **RPP** compare **solo sulle righe verde acqua**, quelle in cui l'accesso sembra su un'altra
+Il pulsante **RPP** compare **solo sulle righe verde acqua**, quelle in cui l'accesso sembra su un'altra
 via: sui civici normali non serve e non c'è. Premendolo lo script chiede conferma e poi crea:
 
 - un **Place residenziale** nel punto del civico ANNCSU;
@@ -411,7 +411,7 @@ via: sui civici normali non serve e non c'è. Premendolo lo script chiede confer
 
 La riga esce dall'elenco dei civici da inserire, perché lo stesso indirizzo non va messo due volte.
 Il Place resta da controllare: guarda punto e indirizzo nel pannello del Place, poi **salva tu** con
-Ctrl+S. Se il tuo editor non espone i metodi per i Place, il bottone non compare.
+Ctrl+S. Se il tuo editor non espone i metodi per i Place, il pulsante non compare.
 
 ### Come vengono trovati i civici già presenti
 
@@ -551,7 +551,7 @@ Al termine arriva un riepilogo con inseriti, saltati e motivi dei rifiuti. **Poi
 ## 10 · Traccia le vie dell'agro
 
 Nelle campagne il problema non è scrivere il nome: è **capire quale via è quale**. Le strade sono
-lunghe, si incrociano, spesso non hanno nome sulla mappa, e i cartelli non ci sono. Questo bottone
+lunghe, si incrociano, spesso non hanno nome sulla mappa, e i cartelli non ci sono. Questo pulsante
 risponde a quella domanda, e solo a quella: **i civici non si vedono e non si inseriscono da qui**, si
 lavorano come sempre catturando i segmenti.
 
@@ -579,7 +579,7 @@ mappa: è legato alla via, non alla posizione nell'elenco.
 (quelli che un nome ce l'hanno non vengono toccati), tutti in un colpo,
 con le regole di *Applica come*: dentro il centro abitato il nome principale con la città, fuori il
 nome principale senza città più l'alternativo con la città. Prima di scrivere ti chiede conferma, e
-vale tutto quello che vale per il bottone *Applica ai segmenti*: verifica segmento per segmento,
+vale tutto quello che vale per il pulsante *Applica ai segmenti*: verifica segmento per segmento,
 rampe escluse, alternativi rispettati.
 
 **3. I civici li fai dopo, come sempre.** Una volta che la via ha il nome, catturi i segmenti con
@@ -646,7 +646,7 @@ Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il p
 | *rampa: …* | hai catturato una rampa | toglila dalla lista: le rampe non si nominano con ANNCSU |
 | *formato non accettato da Waze* | esponente numerico o di più di due lettere | inseriscilo a mano |
 | *nero con esponente R* | a Genova, Savona e Firenze `3r` su Waze si legge come rosso | verifica sul posto e inseriscilo a mano |
-| *accesso su …* | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il bottone **RPP** |
+| *accesso su …* | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il pulsante **RPP** |
 | *sei in modalità snapshot / pratica* | l'editor non salverebbe le modifiche | esci dalla modalità e riprova |
 | *Nessun civico ANNCSU entro N m* | raggio troppo stretto o comune non ancora georiferito | allarga il raggio; se resta vuoto, il Comune non ha caricato le coordinate |
 
