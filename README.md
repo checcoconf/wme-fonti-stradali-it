@@ -3,7 +3,7 @@
 Userscript per il **Waze Map Editor** che confronta i segmenti selezionati con i civici e gli odonimi
 ufficiali **ANNCSU** (Archivio Nazionale dei Numeri Civici e delle Strade Urbane – Istat / Agenzia
 delle Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa, compila nome via/contrada,
-località, comune e inserisce i numeri civici (esponente compreso: `343/A` diventa `343a`, come vuole Waze).
+località, comune e inserisce i numeri civici (esponente compreso, nel formato `343/A`, `12/BIS`).
 
 Nomi e civici seguono le guide della [**Wazeopedia Italia**](https://www.waze.com/discuss/c/wazeopedia/italy-wazeopedia/5205)
 (Denominazione delle strade, Numeri civici, Centro abitato & City Boundary) e lo script usa **solo
@@ -28,7 +28,6 @@ Creato da **checcoconf** · dati: ANNCSU, open data con licenza [CC-BY 4.0](http
 7. [Confronta con ANNCSU](#7--confronta-con-anncsu)
 8. [Applica i nomi ai segmenti](#8--applica-i-nomi-ai-segmenti)
 9. [Inserimento dei numeri civici](#9--inserimento-dei-numeri-civici)
-10. [Traccia le vie dell'agro](#10--traccia-le-vie-dellagro)
 
 In fondo: [Se qualcosa non funziona](#se-qualcosa-non-funziona) · [Errori e cosa fare](#errori-e-cosa-fare) · [Note per gli editor](#note-per-gli-editor) · [Licenza](#licenza)
 
@@ -94,8 +93,9 @@ si disegna niente sulla mappa.
 5. Controlla il nome proposto (e gli avvisi sotto la casella), scegli la città se ti viene chiesto,
    **Applica ai segmenti** e **salva**.
 6. **+N civici su Waze**: elenco di controllo con spunte. Quelli già su Waze, quelli da fare come RPP e
-   quelli che Waze non accetta arrivano senza spunta. Controlla con **Street View**, poi **Inserisci** e
-   salva di nuovo.
+   quelli **da verificare** (formati insoliti come `20/1`) arrivano senza spunta. Controlla con
+   **Street View**, poi **Inserisci** e salva di nuovo. Vale anche **fuori centro abitato**: lì si
+   inseriscono civici normali come in paese.
 
 ---
 
@@ -166,7 +166,7 @@ I segmenti catturati compaiono come **chip** sotto il menu:
 - clic sulla **×** (o ri-clic sul segmento con il modificatore) → lo toglie dalla lista;
 - **chip rosso** → su quel segmento l'ultimo *Applica* è fallito;
 - **Aggiungi selezione attuale** → mette in lista i segmenti selezionati nell'editor. Comodo dopo una
-  multi-selezione o dopo aver cliccato una via nel [tracciato dell'agro](#10--traccia-le-vie-dellagro);
+  multi-selezione;
 - **Svuota lista** → azzera tutto (risultati e civici sulla mappa si riallineano da soli).
 
 ### Le altre opzioni
@@ -261,7 +261,54 @@ Per ogni odonimo trovato compare una scheda con:
 - i pulsanti **Copia**, **Applica ai segmenti**, **+N civici su Waze**.
 
 In testa ai risultati la riga **Su Waze ora** dice come sono scritti adesso i segmenti in lista
-(es. `Via Roma, Andria (4) · (senza strada) (1)`), così vedi subito se c'è qualcosa da fare.
+(es. `Via Roma, Andria (4) · (senza strada) (1)`), così vedi subito se c'è qualcosa da fare. Diventa
+**rossa** quando nessun odonimo ANNCSU corrisponde al nome su Waze.
+
+### Odonimo diverso da Waze: l'avviso rosso
+
+Se i segmenti in lista su Waze hanno un **nome diverso** dall'odonimo ANNCSU della scheda, la scheda si
+colora di rosso e in testa compare l'avviso **⛔ Odonimo diverso da Waze**, con i due nomi a confronto:
+
+| Su Waze | ANNCSU |
+|---|---|
+| «Largo Regina Coeli» | «Via Pisanelli» |
+
+Vuol dire che forse in lista c'è la strada sbagliata, oppure che il nome su Waze è vecchio o errato:
+**verifica cartelli o Street View** prima di applicare. Se premi comunque **Applica ai segmenti**, lo
+script ti chiede conferma, perché il nome attuale verrebbe sostituito. Con più segmenti in lista l'avviso
+dice anche quanti hanno un altro nome e quanti sono già a posto.
+
+Il confronto si fa sul nome **già scritto con le regole odonimi di Waze Italia** (quello della casella):
+`VIA PAPA GIOVANNI VENTITREESIMO` di ANNCSU e `Via Papa Giovanni XXIII` su Waze sono la stessa via,
+niente avviso. Ignora maiuscole, accenti e punteggiatura, e vale anche il **nome alternativo** (fuori centro
+abitato il nome principale è senza città e quello con la città è negli alternativi: va bene così).
+
+| Avviso | Quando |
+|---|---|
+| **⛔ rosso** | il nome su Waze è proprio un altro |
+| **⚠️ arancione** *Nome simile, non identico* | stessa specie e stessa ultima parola (`Via G. Pisanelli` / `Via Giuseppe Pisanelli`) o un nome contenuto nell'altro (`Strada Contrada Pozzo` / `Contrada Pozzo`): controlla la forma giusta |
+| nota grigia | un'altra scheda corrisponde al nome su Waze: questa è quasi sempre una via vicina entrata nel raggio |
+| nessun avviso | il nome coincide, o i segmenti sono *senza strada* |
+
+### Civici delle vie vicine non in lista
+
+Vicino a un incrocio il raggio prende anche i civici della **traversa** (o di una via accanto), che su Waze
+è un'altra strada e che **non hai in lista**. Quelle schede non servono e non vengono mostrate: in fondo ai
+risultati una riga dice quali civici sono stati ignorati (es. *Ignorati i civici di vie vicine non in lista:
+Via Sergente Giovanni Luigi Papanice (1 civico)*), e i loro pallini non vengono disegnati sulla mappa. Con
+**mostra** li rivedi (con una nota grigia, mai con l'avviso rosso), con **nascondi** tornano via. Se vuoi
+lavorare anche quella via, catturane i segmenti.
+
+Le schede si nascondono **solo se i segmenti in lista hanno già un nome** e una delle schede corrisponde a
+quel nome: lì è chiaro qual è la tua via. Se i segmenti in lista sono **senza nome** non si nasconde niente,
+perché stai proprio cercando come si chiamano e il nome della strada accanto (spesso la stessa, dopo una
+curva o un incrocio) è l'indizio migliore. Se invece hanno un nome che **non corrisponde** a nessuna scheda,
+le vie vicine restano visibili con una nota grigia e l'avviso rosso resta solo sulle altre.
+
+Una scheda si nasconde quando il suo odonimo è il nome di un segmento caricato accanto, non in
+lista, che **non può essere la tua stessa strada**. Non si nasconde mai se quel nome sta anche su un segmento
+che **prosegue dritto** quello in lista o gli corre **parallelo** (doppia carreggiata): è proprio il caso in
+cui quel nome può servirti, per esempio per dare il nome a un troncone *senza strada*.
 
 Sotto la casella possono comparire:
 
@@ -276,6 +323,8 @@ Sotto la casella possono comparire:
 
 Nella casella trovi il nome già scritto come lo vuole Waze Italia: maiuscole e minuscole a posto,
 accenti, sigle (`SP20bis`), date in numeri arabi (`Via 4 Novembre`), ordinali con l'apice (`2ª Traversa`),
+ordinali di papi e sovrani in numeri romani anche quando ANNCSU li scrive in lettere
+(`Papa Giovanni Ventitreesimo` → `Papa Giovanni XXIII`, `Vittorio Emanuele Secondo` → `Vittorio Emanuele II`),
 abbreviazioni sciolte (`Mons.` → `Monsignor`). Le lettere puntate di nome proprio vengono tolte, perché
 il navigatore non le legge.
 
@@ -347,8 +396,20 @@ finché non confermi.
 **Prerequisiti:** una strada **con nome** e **nessuna modifica pendente** (il WME vieta di aggiungere
 civici su segmenti modificati). Se manca qualcosa, lo script te lo dice prima.
 
-Nella casella il numero è già nel formato che Waze accetta: `343/A` di ANNCSU diventa `343a`. Quelli
-che Waze non accetta (`20/1`, `12/BIS`) restano in lista ma senza spunta, e vanno inseriti a mano.
+Su Waze la **barra è accettata**: lo script scrive i civici nel formato **numero/esponente maiuscolo**,
+come sulle targhe e in ANNCSU: `343/A`, `3/CE`. Anche gli esponenti latini: `12/BIS`, `4/TER`, `7/QUATER`.
+Qualunque modo di scriverli nella casella si normalizza da solo: `75a`, `75 a`, `75/a` → `75/A`;
+`12bis` → `12/BIS`. Questi arrivano spuntati come tutti gli altri. Per il controllo dei doppioni le
+grafie sono equivalenti: un `75a` già su Waze blocca il `75/A` di ANNCSU.
+
+Waze accetta **qualsiasi formato**: quelli davvero insoliti (`20/1`) restano in lista **senza spunta**,
+con l'etichetta **da verificare**, e se li spunti vengono inseriti (vedi [sotto](#numeri-da-verificare-201)).
+
+**Fuori centro abitato** si inseriscono **civici normali**, come in paese. Secondo la guida
+[House Numbers in WME](https://www.waze.com/discuss/t/house-numbers-in-wme/377975) un civico è
+ricercabile se il suo segmento ha una città, principale **o alternativa**: con la regola italiana
+(nome principale senza città + alternativo con la città) il civico funziona. I luoghi residenziali (RPP)
+servono solo nei casi della guida, cioè quando l'accesso è su un'altra strada (vedi sotto).
 
 Ogni civico viene agganciato al segmento **della sua via** più vicino, così un civico d'angolo non
 finisce sulla traversa.
@@ -362,15 +423,16 @@ legge **solo per questi tre comuni**:
 | ANNCSU | Su Waze |
 |---|---|
 | nero `4` | `4` |
-| nero `4` esponente `A` | `4a` |
+| nero `4` esponente `A` | `4/A` |
+| nero `3` esponente `R` | `3/R` |
 | rosso `3` | `3R` |
-| rosso `3` esponente `A` | `3R/a` |
+| rosso `3` esponente `A` | `3R/A` |
 
 Le due numerazioni sono indipendenti: `3R` e `3` sono civici diversi, anche per il controllo dei
 doppioni. In elenco vengono prima i neri e poi i rossi, e il controllo di lato e sequenza si fa
 separatamente per le due serie. Nella casella la `R` attaccata al numero vuol dire sempre *rosso*
-(anche scritta `3r`); per questo un civico **nero con esponente R** (`3/R`) resta senza spunta e va
-inserito a mano, perché su Waze si confonderebbe col rosso.
+(anche scritta `3r`), mentre con la barra è l'esponente di un nero: `3/R` è il nero 3 con esponente R,
+distinto dal rosso `3R`.
 
 Serve una cache generata dalla 0.3.3 in poi: se avevi già scaricato Liguria o Toscana, il pannello te
 lo ricorda e basta riscaricarle.
@@ -380,7 +442,7 @@ lo ricorda e basta riscaricarle.
 | Elemento | Significato |
 |---|---|
 | **Spunta** | il civico verrà inserito |
-| **Numero modificabile** | già nel formato Waze; si normalizza da solo: `18/B`, `18 B` → `18b` |
+| **Numero modificabile** | già nel formato dello script; si normalizza da solo: `18b`, `18 B`, `18/b` → `18/B` |
 | **Distanza** | quanto dista il punto ANNCSU dal segmento |
 | Riga con bordo **azzurro** | **già su Waze**: esiste un civico con lo stesso numero entro 40 m → spunta tolta |
 | Riga con bordo **arancione** | **già su Waze ma posizionato male**: il numero esiste su questa strada, ma a più di 40 m dal punto ANNCSU → spunta tolta, va **spostato** non aggiunto (vedi sotto) |
@@ -389,7 +451,7 @@ lo ricorda e basta riscaricarle.
 | Riga con bordo **ocra** | **lato o sequenza insoliti**: un dispari in mezzo ai pari (o viceversa), o un numero fuori ordine lungo la via → spunta tolta. Sono i due errori che Waze contesta al salvataggio (*lato errato*, *fuori sequenza*): controlla su Street View; se il civico è giusto spuntalo e al salvataggio va **forzato** |
 | Riga con bordo **verde acqua** | **accesso su un'altra via**: il punto ANNCSU è più vicino a un'altra strada con nome che alla sua → spunta tolta; se l'ingresso è davvero lì serve un **luogo residenziale (RPP)**, non un civico |
 | Riga azzurra *già su Waze come RPP* | su questa via esiste già un luogo residenziale con quel numero: non va aggiunto anche come civico |
-| Riga con bordo **rosso** | numero in un **formato che Waze non accetta** (`20/1`, `12/BIS`) → vedi sotto |
+| Riga con bordo **ambra** ed etichetta **DA VERIFICARE** | numero in un **formato insolito** (`20/1`): Waze lo accetta, ma arriva senza spunta → vedi sotto |
 | Riga esclusa | oltre **45 m** dalla strada: Waze la rifiuterebbe, va inserita a mano |
 
 Un clic sulla riga **centra la mappa** su quel civico; il pulsante con l'**occhio** apre direttamente **Street View**
@@ -406,12 +468,19 @@ Il pulsante **RPP** compare **solo sulle righe verde acqua**, quelle in cui l'ac
 via: sui civici normali non serve e non c'è. Premendolo lo script chiede conferma e poi crea:
 
 - un **Place residenziale** nel punto del civico ANNCSU;
-- **via e numero civico** dell'indirizzo (la via dell'odonimo, non quella dell'accesso);
+- **via e numero civico** dell'indirizzo (la via dell'odonimo, non quella dell'accesso), con il numero
+  come l'hai scritto nella casella. Un RPP ha una sola coppia via/città (i civici invece usano anche gli
+  alternativi): se il segmento è fuori centro abitato, lo script usa la via **con la città**, altrimenti
+  l'RPP non sarebbe ricercabile;
 - il **punto di arrivo** sulla strada dell'accesso, nel punto più vicino al civico.
 
 La riga esce dall'elenco dei civici da inserire, perché lo stesso indirizzo non va messo due volte.
 Il Place resta da controllare: guarda punto e indirizzo nel pannello del Place, poi **salva tu** con
 Ctrl+S. Se il tuo editor non espone i metodi per i Place, il pulsante non compare.
+
+Se lo stesso numero esiste già come **civico normale** su questa via a più di 50 m, lo script non crea
+l'RPP e te lo dice: Waze lo rifiuterebbe al salvataggio con *numero civico non valido*. Prima elimina o
+sposta quel civico.
 
 ### Come vengono trovati i civici già presenti
 
@@ -522,20 +591,26 @@ restano illeggibili per chi naviga e possono far scattare i controlli di Waze. I
 inserirne uno solo adesso e creare gli altri con **+ Aggiungi al centro mappa**, dopo aver centrato la
 mappa sul portone giusto: nascono già nella posizione corretta.
 
-### Numeri che Waze non accetta (`20/1`, `12/BIS`)
+### Numeri da verificare (`20/1`)
 
-Waze vuole un numero seguito da al massimo due lettere minuscole. Un esponente numerico (`2/4`, spesso
-una colonna del CSV letta male) o di più lettere (`BIS`, `TER`) non si può inserire così com'è: la riga
-resta senza spunta con l'avviso *formato non accettato da Waze*. Se hai verificato che il numero giusto
-è un altro, correggilo nella casella e spuntalo; altrimenti va inserito a mano.
+Waze ora accetta **qualsiasi formato** di civico. Gli esponenti di una o due lettere e quelli latini
+(`bis`, `ter`, `quater`) sono normali e arrivano spuntati. Un esponente numerico (`20/1`, a volte una
+colonna del CSV letta male) o un'altra parola (`5/QUINQUIES`) però è spesso un dato d'archivio da
+controllare, quindi:
+
+- la riga arriva **senza spunta**, con l'etichetta **DA VERIFICARE**;
+- nella casella il numero è già ripulito (`20/1` resta `20/1`, `5/quinquies` → `5/QUINQUIES`);
+- guarda il posto su **Street View**: se è giusto **spuntalo** e viene inserito così com'è; se il numero
+  vero è un altro, correggilo nella casella e spuntalo;
+- il link *tutti* non li seleziona: si scelgono uno per uno.
 
 La barra sopra la lista li **mostra** (predefinito) o li **nasconde** tutti insieme; la scelta resta
 salvata fra le sessioni.
 
 ### Aggiungere un civico letto su Street View
 
-Con **+ Aggiungi al centro mappa**: centra la mappa sul portone, scrivi il numero (es. `18b`) e premi. La riga
-nasce lì, già spuntata. Se il centro mappa è a più di 45 m dai segmenti in lista lo script te lo
+Con **+ Aggiungi al centro mappa**: centra la mappa sul portone, scrivi il numero (es. `18/B`, o qualsiasi
+altro formato) e premi. La riga nasce lì, già spuntata. Se il centro mappa è a più di 45 m dai segmenti in lista lo script te lo
 impedisce, perché Waze lo rifiuterebbe.
 
 ### Conferma
@@ -545,70 +620,6 @@ hai spuntato lo stesso numero in più punti lo script ti avvisa: Waze ne accetta
 Se hai spuntato a mano un numero già fatto come RPP o con l'accesso su un'altra via, prima di inserire
 ti chiede conferma.
 Al termine arriva un riepilogo con inseriti, saltati e motivi dei rifiuti. **Poi salva.**
-
----
-
-## 10 · Traccia le vie dell'agro
-
-Nelle campagne il problema non è scrivere il nome: è **capire quale via è quale**. Le strade sono
-lunghe, si incrociano, spesso non hanno nome sulla mappa, e i cartelli non ci sono. Questo pulsante
-risponde a quella domanda, e solo a quella: **i civici non si vedono e non si inseriscono da qui**, si
-lavorano come sempre catturando i segmenti.
-
-> **Serve fuori dai centri abitati.** In paese le vie sono corte, fitte e quasi sempre già a nome: lì
-> non aggiunge niente, e con la vista larga si superano subito le **500 strade** del limite. Se lo apri
-> in centro abitato, la scheda te lo dice.
-
-Premendolo, lo script prende i civici ANNCSU a schermo, assegna ogni civico al segmento più vicino
-(fino a 25 m) e traccia **solo i segmenti che su Waze non hanno nome**, colorandoli secondo la via a cui
-appartengono. Le strade già a nome non vengono colorate: quelle non sono lavoro da fare. È in **sola
-lettura**: finché non sei tu a chiederlo, non cambia niente sulla mappa.
-
-### Come si usa
-
-**1. Accendi le vie che ti interessano.** All'apertura la mappa resta pulita: nell'elenco, accanto a
-ogni via, c'è un **quadratino colorato** che accende o spegne il suo tracciato. Un clic sul quadratino
-colora solo quella; un clic sulla **riga** la colora, ci porta sopra la mappa e ne seleziona i segmenti
-nell'editor. Sopra l'elenco, *tutte* e *nessuna* per fare in blocco.
-
-Il tracciato acceso mostra il percorso con il nome scritto sopra: così vedi dove comincia e dove
-finisce e capisci se è davvero la via che pensavi. **Il colore di una via non cambia** quando sposti la
-mappa: è legato alla via, non alla posizione nell'elenco.
-
-**2. Se il nome è giusto, premi Applica.** Scrive quel nome sui segmenti **senza nome** di quella via
-(quelli che un nome ce l'hanno non vengono toccati), tutti in un colpo,
-con le regole di *Applica come*: dentro il centro abitato il nome principale con la città, fuori il
-nome principale senza città più l'alternativo con la città. Prima di scrivere ti chiede conferma, e
-vale tutto quello che vale per il pulsante *Applica ai segmenti*: verifica segmento per segmento,
-rampe escluse, alternativi rispettati.
-
-**3. I civici li fai dopo, come sempre.** Una volta che la via ha il nome, catturi i segmenti con
-ALT + clic e usi l'elenco di controllo: è lì che i civici si vedono, si scelgono e si inseriscono.
-
-Ogni riga dice **quale contrada è** secondo ANNCSU, quanti segmenti restano da nominare e su quanti
-civici si basa la conclusione. Se altri tronconi della stessa via hanno già un nome, lo trovi in coda
-alla riga: è l'indizio più forte per capire di che contrada si tratta.
-
-| In coda alla riga | Significato |
-|---|---|
-| **✓ N già a nome** | altri tronconi si chiamano già come dice ANNCSU: puoi procedere tranquillo |
-| **≠ N già a nome** | altri tronconi hanno un nome **diverso** da ANNCSU: controlla quale dei due è giusto prima di applicare |
-| nessuna coda | nessun troncone con nome nei dintorni: fidati dei civici, ma verifica sul posto |
-
-Più civici ci sono, più la conclusione è solida: una via con quaranta civici è quasi certa, una con tre
-è un indizio.
-
-La spunta **"nascondi le strade che non posso modificare"** tiene fuori quelle bloccate sopra il tuo
-livello.
-
-Quando in una vista non resta niente da nominare, la scheda te lo dice e puoi passare oltre.
-
-**Come si comporta:** all'accensione si porta da solo allo **zoom 16** e poi ti segue mentre giri la
-mappa; non usa il **Raggio** del pannello, che vale solo quando scegli tu i segmenti; le vie tracciate
-sono a tratto pieno, mentre il **tratteggio** sono i segmenti che hai in lista.
-
-> Quello che vedi è **ANNCSU, non il vangelo**: un odonimo può essere diverso da quello sui cartelli e
-> qualche civico può essere fuori posto. Il tracciato ti dice dove guardare, la decisione resta tua.
 
 ---
 
@@ -644,8 +655,8 @@ Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il p
 | *città non risolvibile via SDK* | il comune (o la frazione) non esiste ancora nel modello | impostalo una volta a mano su un segmento vicino |
 | *città vuota ("Nessuno") della regione giusta non trovata* | serve per la regola fuori centro abitato | apri o aggiungi in zona un segmento senza città e riprova |
 | *rampa: …* | hai catturato una rampa | toglila dalla lista: le rampe non si nominano con ANNCSU |
-| *formato non accettato da Waze* | esponente numerico o di più di due lettere | inseriscilo a mano |
-| *nero con esponente R* | a Genova, Savona e Firenze `3r` su Waze si legge come rosso | verifica sul posto e inseriscilo a mano |
+| *⛔ Odonimo diverso da Waze* | il nome dei segmenti su Waze è un altro rispetto ad ANNCSU | verifica cartelli o Street View: forse in lista c'è la strada sbagliata; se applichi, lo script chiede conferma |
+| *da verificare: formato insolito* | esponente numerico o una parola diversa da bis/ter/quater (`20/1`, `5/QUINQUIES`) | Waze lo accetta: controlla sul posto e, se è giusto, spuntalo |
 | *accesso su …* | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il pulsante **RPP** |
 | *sei in modalità snapshot / pratica* | l'editor non salverebbe le modifiche | esci dalla modalità e riprova |
 | *Nessun civico ANNCSU entro N m* | raggio troppo stretto o comune non ancora georiferito | allarga il raggio; se resta vuoto, il Comune non ha caricato le coordinate |

@@ -58,6 +58,8 @@
 "contestoRomanoPrima": ["vico","papa","pio","giovanni","paolo","leone","benedetto","gregorio","clemente","innocenzo","urbano","sisto","celestino","callisto","alessandro","adriano","onorio","stefano","silvestro","vittore","eugenio","marcello","nicola","pasquale","anastasio","giulio","martino","re","regina","imperatore","imperatrice","umberto","carlo","vittorio","emanuele","ferdinando","alfonso","federico","enrico","luigi","napoleone","amedeo","filippo","guglielmo","giorgio","elisabetta","ludovico","lodovico","traversa","traverse","parallela","trasversale","lotto","comparto","isolato","corte","vicolo","fila","braccio","ramo","legione","reggimento","battaglione","corpo","zona","strada"],
 "_note_tetto": "Negli odonimi i numeri sono piccoli (traverse fino a una decina, papi fino a XXIII). Sopra questo valore un romano ambiguo e' considerato parola, non numero: DI vale 501, LI 51, MI 1001, C 100.",
 "romanoMaxAmbiguo": 10,
+"_note_ordinali": "Ordinali di papi e sovrani scritti in lettere (Papa Giovanni Ventitreesimo, Vittorio Emanuele Secondo): lo script li scrive in numeri romani se la parola prima e' in contestoRomanoPrima. Qui i nome+cognome che sembrano ordinali e vanno lasciati in lettere.",
+"eccezioniOrdinali": ["ruggero settimo"],
 "contestoRomanoDopo": ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"],
 
 "_note_nomi": "Nomi di persona usati dall'euristica sui cognomi. Un token di una sola lettera seguito da punto (G., A.) vale come nome.",
