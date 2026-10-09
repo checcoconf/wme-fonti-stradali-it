@@ -403,7 +403,7 @@ Qualunque modo di scriverli nella casella si normalizza da solo: `75a`, `75 a`, 
 grafie sono equivalenti: un `75a` già su Waze blocca il `75/A` di ANNCSU.
 
 Waze accetta **qualsiasi formato**: quelli davvero insoliti (`20/1`) restano in lista **senza spunta**,
-con l'etichetta **da verificare**, e se li spunti vengono inseriti (vedi [sotto](#numeri-da-verificare-201)).
+con il bordo ambra **da verificare**, e se li spunti vengono inseriti (vedi [sotto](#numeri-da-verificare-201)).
 
 **Fuori centro abitato** si inseriscono **civici normali**, come in paese. Secondo la guida
 [House Numbers in WME](https://www.waze.com/discuss/t/house-numbers-in-wme/377975) un civico è
@@ -439,19 +439,28 @@ lo ricorda e basta riscaricarle.
 
 ### Cosa vedi nell'elenco
 
+Ogni civico occupa **una sola riga**, con la grafica della 0.3.5: spunta, numero, distanza, pulsante
+Street View e, quando serve, pulsante **RPP**. Lo **stato** lo dice il **colore del bordo** a sinistra,
+spiegato nella legenda sopra l'elenco. Se la barra laterale è abbastanza larga (elenco da 300 px in su),
+fra numero e distanza compare anche una **nota corta** (es. *già su Waze*, *spostalo (38 m)*); nel
+pannello stretto la nota non c'è, ma passando il mouse sulla riga la trovi sempre in cima al
+suggerimento, seguita dalla spiegazione completa. La casella del numero si allarga da sola per i numeri
+lunghi (`5/QUINQUIES`), che non vengono mai tagliati.
+
 | Elemento | Significato |
 |---|---|
 | **Spunta** | il civico verrà inserito |
 | **Numero modificabile** | già nel formato dello script; si normalizza da solo: `18b`, `18 B`, `18/b` → `18/B` |
-| **Distanza** | quanto dista il punto ANNCSU dal segmento |
-| Riga con bordo **azzurro** | **già su Waze**: esiste un civico con lo stesso numero entro 40 m → spunta tolta |
-| Riga con bordo **arancione** | **già su Waze ma posizionato male**: il numero esiste su questa strada, ma a più di 40 m dal punto ANNCSU → spunta tolta, va **spostato** non aggiunto (vedi sotto) |
-| Riga con bordo **giallo** | **ripetizione**: lo stesso numero su un altro record ANNCSU → spunta tolta, decidi tu |
-| Riga con bordo **viola** | **civici sovrapposti**: due o più punti sulla stessa identica coordinata (meno di 1,5 m) → tutto il gruppo senza spunta, scegli tu quali inserire e poi vanno spostati (vedi sotto) |
-| Riga con bordo **ocra** | **lato o sequenza insoliti**: un dispari in mezzo ai pari (o viceversa), o un numero fuori ordine lungo la via → spunta tolta. Sono i due errori che Waze contesta al salvataggio (*lato errato*, *fuori sequenza*): controlla su Street View; se il civico è giusto spuntalo e al salvataggio va **forzato** |
-| Riga con bordo **verde acqua** | **accesso su un'altra via**: il punto ANNCSU è più vicino a un'altra strada con nome che alla sua → spunta tolta; se l'ingresso è davvero lì serve un **luogo residenziale (RPP)**, non un civico |
-| Riga azzurra *già su Waze come RPP* | su questa via esiste già un luogo residenziale con quel numero: non va aggiunto anche come civico |
-| Riga con bordo **ambra** ed etichetta **DA VERIFICARE** | numero in un **formato insolito** (`20/1`): Waze lo accetta, ma arriva senza spunta → vedi sotto |
+| **Distanza** (es. `~4 m`) | quanto dista il punto ANNCSU dal segmento |
+| Bordo **azzurro**, nota *già su Waze* | esiste un civico con lo stesso numero entro 40 m → spunta tolta |
+| Bordo **arancione**, nota *spostalo (N m)* | **già su Waze ma posizionato male**: il numero esiste su questa strada, ma a N m dal punto ANNCSU (oltre 40) → spunta tolta, va **spostato** non aggiunto (vedi sotto) |
+| Bordo **giallo**, nota *2° punto, a N m* | **ripetizione**: lo stesso numero su un altro record ANNCSU, a N m dal primo punto → spunta tolta, decidi tu |
+| Bordo **viola**, nota *N sovrapposti* | **civici sovrapposti**: N punti sulla stessa identica coordinata → tutto il gruppo senza spunta, scegli tu quali inserire e poi vanno spostati (vedi sotto) |
+| Bordo **ocra**, nota *fuori sequenza* o *sul lato dei pari/dispari* | **lato o sequenza insoliti**: un dispari in mezzo ai pari (o viceversa), o un numero fuori ordine lungo la via → spunta tolta. Sono i due errori che Waze contesta al salvataggio (*lato errato*, *fuori sequenza*): controlla su Street View; se il civico è giusto spuntalo e al salvataggio va **forzato** |
+| Bordo **verde acqua**, nota *su* + nome della via | **accesso su un'altra via**: il punto ANNCSU è più vicino a quella strada con nome che alla sua → spunta tolta; se l'ingresso è davvero lì serve un **luogo residenziale (RPP)**, non un civico |
+| Bordo azzurro, nota *già RPP su Waze* | su questa via esiste già un luogo residenziale con quel numero: non va aggiunto anche come civico |
+| Bordo **ambra**, nota *da verificare* | numero in un **formato insolito** (`20/1`): Waze lo accetta, ma arriva senza spunta → vedi sotto |
+| Nota *aggiunto da te* | riga creata con **+ Aggiungi al centro mappa** |
 | Riga esclusa | oltre **45 m** dalla strada: Waze la rifiuterebbe, va inserita a mano |
 
 Un clic sulla riga **centra la mappa** su quel civico; il pulsante con l'**occhio** apre direttamente **Street View**
@@ -472,7 +481,10 @@ via: sui civici normali non serve e non c'è. Premendolo lo script chiede confer
   come l'hai scritto nella casella. Un RPP ha una sola coppia via/città (i civici invece usano anche gli
   alternativi): se il segmento è fuori centro abitato, lo script usa la via **con la città**, altrimenti
   l'RPP non sarebbe ricercabile;
-- il **punto di arrivo** sulla strada dell'accesso, nel punto più vicino al civico.
+- il **punto di arrivo** (punto di ingresso) sulla strada dell'accesso, nel punto più vicino al civico,
+  con il **nome della via su cui si affaccia** l'ingresso, cioè la strada del segmento su cui il punto
+  è agganciato (non quella dell'indirizzo). Se il tuo editor non accetta il nome sul punto, lo script
+  mette comunque il punto e nel messaggio finale ti dice di scrivere il nome a mano.
 
 La riga esce dall'elenco dei civici da inserire, perché lo stesso indirizzo non va messo due volte.
 Il Place resta da controllare: guarda punto e indirizzo nel pannello del Place, poi **salva tu** con
@@ -519,7 +531,7 @@ Il controllo sui civici già presenti è doppio:
 
 1. **stesso numero entro 40 m** → *già su Waze*, riga azzurra: non c'è niente da fare;
 2. **stesso numero sulla stessa strada ma oltre 40 m** → *già su Waze ma posizionato male*, riga
-   arancione con la distanza (`già su Waze ma a ~120 m: da spostare, non da aggiungere`).
+   arancione con la distanza (nota `spostalo (120 m)` nel pannello largo, sempre nel suggerimento della riga).
 
 Passando il mouse sulla riga, il tooltip dice **dove** sta il civico trovato (via e segmento): se una
 segnalazione ti sembra sbagliata la verifichi in un attimo.
@@ -567,7 +579,7 @@ un errore.
 Lo script raggruppa **solo** i civici che l'archivio mette sulla **stessa identica coordinata**
 (confronto esatto, nessuna soglia in metri) e li presenta così:
 
-- riga **viola**, con la nota `N civici sulla stessa coordinata: scegli quelli veri, poi vanno spostati`;
+- riga **viola**, con la nota `N sovrapposti` (la spiegazione completa è nel suggerimento della riga);
 - **tutto il gruppo arriva senza spunta**, nessuno viene inserito di iniziativa dello script;
 - il link *tutti* non li seleziona, per lo stesso motivo;
 - puoi spuntarne **uno, alcuni o tutti**: la scelta è libera, lo script non decide al posto tuo;
@@ -598,7 +610,7 @@ Waze ora accetta **qualsiasi formato** di civico. Gli esponenti di una o due let
 colonna del CSV letta male) o un'altra parola (`5/QUINQUIES`) però è spesso un dato d'archivio da
 controllare, quindi:
 
-- la riga arriva **senza spunta**, con l'etichetta **DA VERIFICARE**;
+- la riga arriva **senza spunta**, col bordo ambra e la nota **da verificare**;
 - nella casella il numero è già ripulito (`20/1` resta `20/1`, `5/quinquies` → `5/QUINQUIES`);
 - guarda il posto su **Street View**: se è giusto **spuntalo** e viene inserito così com'è; se il numero
   vero è un altro, correggilo nella casella e spuntalo;
@@ -646,7 +658,7 @@ Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il p
 | *segmento bloccato o permessi insufficienti* | il segmento ha un lock sopra il tuo livello | chiedi lo **unlock** alla community, poi riprova |
 | *strada senza nome* | i civici esistono solo su strade con nome | dai prima il nome alla strada (puoi catturarla con lo script) |
 | *già su Waze* | il civico esiste già lì vicino | niente da fare: non viene reinserito |
-| *già su Waze ma posizionato male* | il numero esiste su questa strada, ma lontano dal punto ANNCSU | **trascina** il civico esistente sul punto giusto; non aggiungerne un secondo |
+| *già su Waze ma posizionato male* (nota *spostalo (N m)*) | il numero esiste su questa strada, ma lontano dal punto ANNCSU | **trascina** il civico esistente sul punto giusto; non aggiungerne un secondo |
 | *segmento con modifiche non salvate* | il WME vieta i civici su segmenti modificati | salva con **Ctrl+S**, riapri l'elenco e riconferma |
 | *già esistente / duplicate* (in salvataggio) | doppione | elimina il civico in più |
 | *lato errato* / *fuori sequenza* | Waze contesta la posizione | ricontrolla i punti; se sono corretti sul territorio usa **Salva → Forza** |
@@ -656,8 +668,8 @@ Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il p
 | *città vuota ("Nessuno") della regione giusta non trovata* | serve per la regola fuori centro abitato | apri o aggiungi in zona un segmento senza città e riprova |
 | *rampa: …* | hai catturato una rampa | toglila dalla lista: le rampe non si nominano con ANNCSU |
 | *⛔ Odonimo diverso da Waze* | il nome dei segmenti su Waze è un altro rispetto ad ANNCSU | verifica cartelli o Street View: forse in lista c'è la strada sbagliata; se applichi, lo script chiede conferma |
-| *da verificare: formato insolito* | esponente numerico o una parola diversa da bis/ter/quater (`20/1`, `5/QUINQUIES`) | Waze lo accetta: controlla sul posto e, se è giusto, spuntalo |
-| *accesso su …* | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il pulsante **RPP** |
+| *da verificare: formato insolito* (bordo ambra) | esponente numerico o una parola diversa da bis/ter/quater (`20/1`, `5/QUINQUIES`) | Waze lo accetta: controlla sul posto e, se è giusto, spuntalo |
+| *su …* (riga verde acqua) | l'ingresso sembra su un'altra via | verifica su Street View; se è così usa il pulsante **RPP**: il punto di ingresso prende il nome di quella via |
 | *sei in modalità snapshot / pratica* | l'editor non salverebbe le modifiche | esci dalla modalità e riprova |
 | *Nessun civico ANNCSU entro N m* | raggio troppo stretto o comune non ancora georiferito | allarga il raggio; se resta vuoto, il Comune non ha caricato le coordinate |
 
