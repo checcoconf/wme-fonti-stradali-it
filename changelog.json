@@ -1,0 +1,9 @@
+[
+  {
+    "version": "1.0.0",
+    "date": "2026-10-30",
+    "changes": {
+      "it": "<ul><li><b>Prima versione ufficiale</b> di WME Fonti Stradali IT.</li><li><b>Avvisi di aggiornamento</b>: quando esce una nuova versione lo script te lo dice subito, con una notifica nella campanella del WME (bottone <b>Aggiorna</b>) e un bottone verde accanto alla versione nel pannello. Dopo l'installazione basta ricaricare l'editor (F5).</li><li><b>Novit&agrave; di ogni versione</b>: dopo un aggiornamento trovi nella campanella cosa &egrave; cambiato. Si riaprono anche cliccando il numero di versione nel pannello.</li><li>Le notifiche sono condivise tra WME e WME beta: l'avviso arriva una volta sola.</li></ul>"
+    }
+  }
+]

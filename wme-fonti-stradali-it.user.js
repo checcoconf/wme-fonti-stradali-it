@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      0.3.6
+// @version      1.0.0
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       Francesco Conforti (checcoconf)
 // @copyright    2026 Francesco Conforti
@@ -19,19 +19,24 @@
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @grant        GM_getResourceText
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addValueChangeListener
+// @require      https://update.greasyfork.org/scripts/602363/1979854/WME%20Alert%20System.js
 // @resource     comuni       https://raw.githubusercontent.com/checcoconf/wme-fonti-stradali-it/main/data/comuni.json
 // @resource     odonimi      https://raw.githubusercontent.com/checcoconf/wme-fonti-stradali-it/main/data/odonimi.json
 // @connect      anncsu.open.agenziaentrate.gov.it
 // @connect      www.istat.it
 // @connect      istat.it
 // @connect      raw.githubusercontent.com
+// @connect      api.github.com
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @run-at       document-end
 // @license      GPL-3.0-or-later; https://www.gnu.org/licenses/gpl-3.0.txt
 // ==/UserScript==
 
-/* global getWmeSdk, GM_xmlhttpRequest, GM_getResourceText, GM_info */
+/* global getWmeSdk, GM_xmlhttpRequest, GM_getResourceText, GM_info, WmeAlertSystem */
 
 /*
  * WME Fonti Stradali IT
@@ -513,7 +518,7 @@
     function bloccoHtml(info) {
         const code = info.code || 503;
         const testa = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>`;
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div>${verHtml()}</div>`;
         const utente = `<p><b>Utente Waze:</b> ${escapeHtml(info.user || 'sconosciuto')}</p>`;
         const dettaglio = info.reason ? `<p class="wfit-muted">Dettaglio: ${escapeHtml(info.reason)}</p>` : '';
 
@@ -557,6 +562,7 @@
     function renderBlocked(info) {
         if (!panelEl) return;
         panelEl.innerHTML = bloccoHtml(info);
+        aggiornaBadgeVersione();
         const b = panelEl.querySelector('#wfit-auth-retry');
         if (b) b.addEventListener('click', async () => {
             b.disabled = true; b.textContent = 'Controllo in corso\u2026';
@@ -844,6 +850,190 @@
     }
 
     /* ------------------------------------------------------------------ */
+    /* Aggiornamenti e avvisi (WME Alert System)                           */
+    /* ------------------------------------------------------------------ */
+    // Tampermonkey controlla gli aggiornamenti per conto suo, ma di solito una volta al giorno
+    // e in silenzio. Qui lo script lo chiede da se' all'ultima release su GitHub a ogni avvio
+    // (e poi ogni UPDATE_RECHECK_H ore se l'editor resta aperto) e, se c'e' una versione nuova:
+    //   - mette una notifica nella campanella del WME, con il bottone "Aggiorna" che apre
+    //     l'installazione di Tampermonkey (una volta per versione, resta finche' non aggiorni);
+    //   - mostra uno snackbar a ogni avvio, cosi' non passa inosservata;
+    //   - accende accanto alla versione, nel pannello, il bottone "Aggiorna a vX".
+    // Dopo l'aggiornamento la libreria mette nella campanella l'avviso "aggiornato", che apre le
+    // novita' scritte in changelog.json. La libreria e' condivisa con altri script WME: dialog,
+    // snackbar e notifiche di tutti passano da un'unica coda e non si accavallano.
+    // Se la libreria manca o non parte, lo script lavora lo stesso: resta il bottone nel pannello.
+    const REPO = 'checcoconf/wme-fonti-stradali-it';
+    const INSTALL_URL = `https://github.com/${REPO}/releases/latest/download/wme-fonti-stradali-it.user.js`;
+    const RELEASES_URL = `https://github.com/${REPO}/releases`;
+    const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
+    const CHANGELOG_URL = `https://raw.githubusercontent.com/${REPO}/main/changelog.json`;
+    const UPDATE_RECHECK_H = 6;
+    // Ultima versione uscita PRIMA di questo sistema: serve a chi aggiorna da li', altrimenti la
+    // libreria non saprebbe che c'era una versione precedente e non mostrerebbe le novita'.
+    const VERSIONE_PRIMA_DEGLI_AVVISI = '0.3.6';
+    const SEEN_KEY = 'wmeAlertSystemSeenVersions';   // chiave della libreria, non nostra
+
+    let avvisi = null;          // promessa del client della libreria (null dentro se manca)
+    let nuovaVersione = null;   // es. '0.3.8' quando su GitHub c'e' una release piu' nuova
+
+    // 0.3.10 > 0.3.9: si confrontano i numeri, non le stringhe. Una 'v' davanti si ignora.
+    function versioneMaggiore(a, b) {
+        const pa = String(a || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+        const pb = String(b || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+        }
+        return false;
+    }
+    const versioneValida = v => /^\d+(\.\d+)*$/.test(String(v || ''));
+
+    function gmGetText(url, timeoutMs = 15000, headers = {}) {
+        return new Promise((resolve, reject) => {
+            if (typeof GM_xmlhttpRequest !== 'function') { reject(new Error('GM_xmlhttpRequest non disponibile')); return; }
+            GM_xmlhttpRequest({
+                method: 'GET', url, timeout: timeoutMs, headers,
+                onload: r => (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(new Error('HTTP ' + r.status)),
+                onerror: () => reject(new Error('errore di rete')),
+                ontimeout: () => reject(new Error('timeout'))
+            });
+        });
+    }
+
+    // Chi aveva gia' lo script (impostazioni o abilitazione salvate) ma non e' mai passato dalla libreria:
+    // gli si segna come "vista" l'ultima versione senza avvisi, cosi' al primo avvio di
+    // questa riceve la notifica delle novita'. Chi installa da zero non vede niente (giusto).
+    // La libreria legge sia questa copia sia quella di Tampermonkey e tiene la piu' recente.
+    function seminaVersioneVista() {
+        try {
+            // impostazioni o esito dell'abilitazione salvati = lo script qui e' gia' girato
+            if (!localStorage.getItem(STORE_KEY) && !localStorage.getItem(AUTH_KEY)) return;
+            const viste = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}');
+            if (!viste || typeof viste !== 'object' || Array.isArray(viste) || viste[SCRIPT_ID]) return;
+            viste[SCRIPT_ID] = VERSIONE_PRIMA_DEGLI_AVVISI;
+            localStorage.setItem(SEEN_KEY, JSON.stringify(viste));
+        } catch { /* niente da seminare */ }
+    }
+
+    // Novita' per la libreria: changelog.json sul ramo main, dalla piu' recente.
+    // Il file ha solo l'italiano; 'default' e' la lingua di riserva della libreria, cosi'
+    // le novita' compaiono anche a chi usa il WME in un'altra lingua.
+    async function caricaChangelog() {
+        try {
+            const voci = JSON.parse(await gmGetText(CHANGELOG_URL));
+            if (!Array.isArray(voci)) throw new Error('changelog.json non e\' un elenco');
+            return voci.filter(v => v && versioneValida(v.version) && v.changes).map(v => {
+                const testo = v.changes.it || v.changes.default || '';
+                return { version: String(v.version), date: v.date || '', changes: Object.assign({}, v.changes, { it: testo, default: testo }) };
+            });
+        } catch (e) {
+            log('novita\' non caricate:', e.message);
+            return [];
+        }
+    }
+
+    async function registraAvvisi() {
+        if (typeof WmeAlertSystem === 'undefined') {
+            log('WME Alert System assente: niente campanella, resta il bottone di aggiornamento nel pannello');
+            return null;
+        }
+        try {
+            // se la libreria non parte entro 15 secondi si va avanti senza
+            const api = await Promise.race([WmeAlertSystem.ready(), sleep(15000).then(() => null)]);
+            if (!api) throw new Error('non partita in tempo');
+            return api.register({
+                scriptId: SCRIPT_ID,
+                scriptName: SCRIPT_NAME,
+                version: VERSION,
+                changelog: { mode: 'notification', loader: caricaChangelog }
+            });
+        } catch (e) {
+            log('WME Alert System non disponibile:', e.message);
+            return null;
+        }
+    }
+
+    async function ultimaRelease() {
+        const j = JSON.parse(await gmGetText(RELEASE_API, 15000, { Accept: 'application/vnd.github+json' }));
+        const v = String((j && j.tag_name) || '').replace(/^v/i, '');
+        return versioneValida(v) ? v : null;
+    }
+
+    async function controllaNuovaVersione() {
+        if (!versioneValida(VERSION)) return;   // copia di sviluppo: niente controlli
+        const client = await avvisi;
+
+        // la notifica di una versione che hai gia' installato non serve piu'
+        try {
+            const vecchia = client && client.notification.list().find(n => n.id === 'update');
+            if (vecchia && !versioneMaggiore(vecchia.data && vecchia.data.version, VERSION)) client.notification.remove('update');
+        } catch { /* lista non leggibile */ }
+
+        let ultima = null;
+        try { ultima = await ultimaRelease(); }
+        catch (e) { log('controllo aggiornamenti non riuscito:', e.message); return; }
+        if (!ultima || !versioneMaggiore(ultima, VERSION)) { log(`versione aggiornata (ultima release: ${ultima || '?'})`); return; }
+
+        const giaAvvisato = nuovaVersione === ultima;
+        nuovaVersione = ultima;
+        aggiornaBadgeVersione();
+        log(`nuova versione disponibile: v${ultima}`);
+        if (!client || giaAvvisato) return;   // al ricontrollo periodico non si ripete lo snackbar
+
+        try {
+            client.snackbar.show(`${SCRIPT_NAME} v${ultima} disponibile: aggiorna dalla notifica nella campanella, poi ricarica la pagina (F5).`);
+            // stesso id = stessa notifica: non torna "nuova" a ogni avvio
+            const gia = client.notification.list().find(n => n.id === 'update');
+            if (gia && gia.data && gia.data.version === ultima) return;
+            client.notification.add({
+                id: 'update',
+                title: `${SCRIPT_NAME} v${ultima} disponibile`,
+                message: `E' uscita una nuova versione di ${SCRIPT_NAME}. Premi Aggiorna: Tampermonkey apre la pagina di installazione. Dopo l'installazione ricarica il Waze Map Editor (F5) perche' la nuova versione entri in funzione.`,
+                buttonText: 'Aggiorna',
+                buttonURL: INSTALL_URL,
+                data: { version: ultima }
+            });
+        } catch (e) { log('avviso di aggiornamento non mostrato:', e.message); }
+    }
+
+    // Parte subito dopo l'SDK, PRIMA della verifica dell'abilitazione: anche chi e' bloccato
+    // (per esempio da una versione minima) deve sapere che c'e' l'aggiornamento.
+    function avviaAvvisi() {
+        seminaVersioneVista();
+        avvisi = registraAvvisi();
+        controllaNuovaVersione().catch(e => log('controllo aggiornamenti KO', e));
+        setInterval(() => controllaNuovaVersione().catch(() => { /* riprova al giro dopo */ }), UPDATE_RECHECK_H * 3600000);
+    }
+
+    // Versione nel pannello: cliccandola si aprono le novita'; con un aggiornamento in sospeso
+    // sotto compare il bottone verde. Il pannello si ridisegna spesso (blocco, montaggio),
+    // quindi dopo ogni ridisegno si richiama aggiornaBadgeVersione().
+    const verHtml = () => `<span class="wfit-verbox"><span class="wfit-ver" title="Novità di questa versione">v${VERSION}</span></span>`;
+    function aggiornaBadgeVersione() {
+        if (!panelEl) return;
+        panelEl.querySelectorAll('.wfit-verbox').forEach(box => {
+            let b = box.querySelector('.wfit-upd');
+            if (!nuovaVersione) { if (b) b.remove(); return; }
+            if (!b) {
+                b = document.createElement('a');
+                b.className = 'wfit-upd';
+                b.href = INSTALL_URL;
+                b.target = '_blank';
+                b.rel = 'noopener noreferrer';
+                box.appendChild(b);
+            }
+            b.textContent = `Aggiorna a v${nuovaVersione}`;
+            b.title = 'Apre l\'installazione in Tampermonkey; poi ricarica il WME (F5)';
+        });
+    }
+
+    async function apriNovita() {
+        const client = await avvisi;
+        if (client) { try { await client.changelog.show(); return; } catch (e) { log('novita\' non aperte:', e.message); } }
+        window.open(RELEASES_URL, '_blank', 'noopener');
+    }
+
+    /* ------------------------------------------------------------------ */
     /* Bootstrap                                                           */
     /* ------------------------------------------------------------------ */
 
@@ -861,6 +1051,7 @@
             await sdk.Events.once({ eventName: 'wme-ready' });
         }
         log(`avviato v${VERSION}`);
+        avviaAvvisi();
         sdkSelfTest();
         await buildTab();               // per ora il pannello mostra solo "verifica in corso"
         loadLogQueue();
@@ -1108,7 +1299,10 @@
 #wfit-panel .wfit-sec > h4:first-child { margin-top:0; }
 #wfit-panel .wfit-head .t { font-size:15px; font-weight:800; letter-spacing:.2px; }
 #wfit-panel .wfit-head .by { font-size:10.5px; color:#767c85; margin-top:-2px; }
-#wfit-panel .wfit-ver { background:#eef1f5; border:1px solid #dde2e9; color:#5a6270; border-radius:999px; font-size:9.5px; padding:0 6px; margin-left:auto; }
+#wfit-panel .wfit-verbox { margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+#wfit-panel .wfit-ver { background:#eef1f5; border:1px solid #dde2e9; color:#5a6270; border-radius:999px; font-size:9.5px; padding:0 6px; cursor:pointer; }
+#wfit-panel .wfit-upd { background:#009246; color:#fff; border-radius:999px; font-size:9.5px; font-weight:700; padding:1px 7px; text-decoration:none; white-space:nowrap; }
+#wfit-panel .wfit-upd:hover { background:#007a3a; }
 #wfit-panel .wfit-guide ol { margin:4px 0 4px 18px; padding:0; }
 #wfit-panel .wfit-guide li { margin:5px 0; line-height:1.35; }
 #wfit-panel .wfit-guide li::marker { color:var(--wr); font-weight:700; }
@@ -1221,7 +1415,7 @@
     // Struttura del pannello: blocco di sola presentazione, tenuto fuori da buildTab,
     // che si occupa invece di montarlo e collegarlo.
     const PANEL_HTML = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div>${verHtml()}</div>
 
   <div class="wfit-sec">
   <h4>Dati ANNCSU</h4>
@@ -1465,10 +1659,13 @@
         const p = document.createElement('div');
         p.id = 'wfit-panel';
         p.innerHTML = `
-  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div><span class="wfit-ver">v${VERSION}</span></div>
+  <div class="wfit-head">${logoSvg(30, 8)}<div><div class="t">${SCRIPT_NAME}</div><div class="by">Civici e odonimi ufficiali ANNCSU &middot; a cura di ${AUTORE}</div></div>${verHtml()}</div>
   <div class="wfit-sec"><div class="wfit-muted">Verifica dell'abilitazione in corso&hellip;</div></div>`;
         tabPane.appendChild(p);
         panelEl = p;
+        // un solo ascoltatore sul contenitore: resta valido anche quando il contenuto si ridisegna
+        p.addEventListener('click', e => { if (e.target.closest('.wfit-ver')) apriNovita(); });
+        aggiornaBadgeVersione();
     }
 
     // Il pannello vero e proprio: viene montato solo a verifica superata
@@ -1477,6 +1674,7 @@
         ui = collectUi(panelEl);
         applySettingsToUi();
         wireUi();
+        aggiornaBadgeVersione();
     }
 
     function toast(msg, ms = 4000) {

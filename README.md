@@ -42,6 +42,18 @@ In fondo: [Se qualcosa non funziona](#se-qualcosa-non-funziona) · [Errori e cos
 Gli aggiornamenti arrivano da soli: Tampermonkey controlla l'ultima release pubblicata. In caso di
 dubbio: *Tampermonkey → Utility → Controlla aggiornamenti degli userscript*.
 
+**Avvisi di aggiornamento.** Dalla 1.0.0 lo script controlla da sé l'ultima release a ogni avvio
+(e ogni 6 ore se l'editor resta aperto). Quando ne esce una nuova:
+
+- nella **campanella** del WME compare la notifica con il bottone **Aggiorna**, che apre
+  l'installazione in Tampermonkey;
+- accanto al numero di versione, nel pannello, compare il bottone verde **Aggiorna a vX**.
+
+Dopo l'installazione ricarica l'editor (F5). Nella campanella trovi poi le **novità** della versione;
+si riaprono anche cliccando il numero di versione nel pannello. Gli avvisi passano da
+[WME Alert System](https://greasyfork.org/scripts/602363), la libreria condivisa con altri script
+WME: le notifiche non si accavallano e WME e WME beta le condividono.
+
 **Requisiti**
 
 | Requisito | Dettaglio |

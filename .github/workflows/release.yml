@@ -6,6 +6,10 @@
 # Nota sui file in data/: sono agganciati allo script con @resource e Tampermonkey li
 # riscarica quando lo script si aggiorna. Se correggi solo un JSON, alza comunque @version,
 # altrimenti chi ha gia' lo script installato continua a usare la copia vecchia.
+#
+# Novita': prima di alzare @version aggiungi IN CIMA a changelog.json la voce della nuova
+# versione ({ version, date, changes: { it: '<html>' } }). Lo script la mostra agli editor dopo
+# l'aggiornamento; se manca, la release NON parte. La stessa voce diventa il testo della release.
 
 name: Release userscript
 
@@ -15,6 +19,7 @@ on:
     paths:
       - 'wme-fonti-stradali-it.user.js'
       - 'data/**.json'
+      - 'changelog.json'
   workflow_dispatch:
 
 permissions:
@@ -78,6 +83,24 @@ jobs:
             echo "ok $F"
           done
 
+      - name: changelog.json ha la voce di questa versione?
+        if: steps.chk.outputs.exists == 'false'
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const V = process.env.V;
+            const voci = JSON.parse(fs.readFileSync("changelog.json", "utf8"));
+            if (!Array.isArray(voci) || !voci.length) throw new Error("changelog.json deve essere un elenco non vuoto");
+            const voce = voci.find(v => v && v.version === V);
+            if (!voce) throw new Error("changelog.json: manca la voce della versione " + V + " (aggiungila in cima)");
+            if (voci[0] !== voce) throw new Error("changelog.json: la voce " + V + " deve stare in cima (le voci vanno dalla piu recente)");
+            if (!voce.changes || !String(voce.changes.it || "").trim()) throw new Error("changelog.json: la voce " + V + " non ha il testo in changes.it");
+            fs.writeFileSync("release-body.md", voce.changes.it + "\n");
+            console.log("changelog: ok, voce " + V);
+          '
+
       - name: Genera il .meta.js (solo metadati, per il check aggiornamenti)
         if: steps.chk.outputs.exists == 'false'
         run: awk '/==UserScript==/,/==\/UserScript==/' wme-fonti-stradali-it.user.js > wme-fonti-stradali-it.meta.js
@@ -88,8 +111,7 @@ jobs:
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: v${{ steps.ver.outputs.version }}
-          body: |
-            WME Fonti Stradali IT ${{ steps.ver.outputs.version }}.
+          body_path: release-body.md
           files: |
             wme-fonti-stradali-it.user.js
             wme-fonti-stradali-it.meta.js
