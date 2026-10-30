@@ -54,6 +54,12 @@ si riaprono anche cliccando il numero di versione nel pannello. Gli avvisi passa
 [WME Alert System](https://greasyfork.org/scripts/602363), la libreria condivisa con altri script
 WME: le notifiche non si accavallano e WME e WME beta le condividono.
 
+**Nuovi dati ANNCSU.** Una volta al giorno lo script guarda se ANNCSU ha pubblicato un dataset più
+recente per le regioni che hai già in locale. Non scarica i dati: legge solo la data nel nome del file
+pubblicato (pochi byte). Se una regione è più vecchia, nella campanella arriva la notifica con il
+bottone **Aggiorna**, che riscarica solo quelle regioni, e il pulsante *Aggiorna* del pannello si
+accende di verde. Il download parte solo quando premi tu.
+
 **Requisiti**
 
 | Requisito | Dettaglio |

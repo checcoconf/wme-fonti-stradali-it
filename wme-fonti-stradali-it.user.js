@@ -1001,6 +1001,11 @@
     function avviaAvvisi() {
         seminaVersioneVista();
         avvisi = registraAvvisi();
+        // il bottone "Aggiorna" della notifica dei nuovi dati ANNCSU: va registrato a ogni avvio
+        avvisi.then(c => {
+            try { if (c) c.notification.onAction('riscarica-dataset', () => riscaricaDaNotifica().catch(e => log('riscarico da notifica KO', e))); }
+            catch (e) { log('azione della notifica dati non registrata:', e.message); }
+        });
         controllaNuovaVersione().catch(e => log('controllo aggiornamenti KO', e));
         setInterval(() => controllaNuovaVersione().catch(() => { /* riprova al giro dopo */ }), UPDATE_RECHECK_H * 3600000);
     }
@@ -1075,7 +1080,10 @@
         registerShortcut();
         initSaveTracking();
         avviaControlloNomi();
-        loadCache();
+        loadCache().then(() => controllaNuoviDataset(false)).catch(e => log('controllo nuovi dataset KO', e));
+        // l'editor puo' restare aperto per giorni: si riguarda ogni 6 ore, il limite di una
+        // volta al giorno lo decide controllaNuoviDataset
+        setInterval(() => controllaNuoviDataset(false).catch(() => { /* al prossimo giro */ }), 6 * 3600000);
         flushLogs();
         // Ricontrollo periodico: copre sia la revoca dell'abilitazione sia una nuova
         // versione minima imposta dai coordinatori mentre l'editor e' gia' aperto.
@@ -1161,14 +1169,146 @@
         }
     }
 
-    // Accende il bottone "Aggiorna" quando almeno una regione in locale ha passato STALE_DAYS:
-    // e' solo un promemoria visivo, lo scarico resta sempre una scelta dell'editor.
+    /* ------------------------------------------------------------------ */
+    /* Nuovi dataset ANNCSU nella campanella                               */
+    /* ------------------------------------------------------------------ */
+    // ANNCSU scrive la data dell'estratto nel nome dello zip (indirizzarioPuglia20260915.zip).
+    // Il server non accetta le richieste HEAD, ma risponde a una richiesta parziale: chiedendo
+    // un solo byte rimanda nelle intestazioni il nome del file. Quindi per sapere se c'e' un
+    // dataset nuovo basta 1 byte per regione, non decine di MB.
+    // Si controllano SOLO le regioni che hai in locale, al massimo una volta al giorno. Se una e'
+    // piu' vecchia di quella pubblicata arriva una notifica nella campanella (una sola, con
+    // l'elenco delle regioni): il bottone Aggiorna le riscarica. Lo scarico parte solo se lo premi.
+    const DATASET_CHECK_H = 24;
+    const DSCHECK_KEY = 'wmeFontiIT_dscheck_v1';   // { ts, remoti: { PUGL: '15/09/2026', ... } }
+
+    // '15/09/2026' -> '20260915', confrontabile come stringa
+    const dataOrdinabile = d => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d || ''); return m ? m[3] + m[2] + m[1] : ''; };
+
+    function leggiControlliDataset() {
+        try { const c = JSON.parse(localStorage.getItem(DSCHECK_KEY) || 'null'); if (c && c.remoti) return c; } catch { /* rifacciamo */ }
+        return { ts: 0, remoti: {} };
+    }
+
+    // Nome del file dall'intestazione Content-Disposition (filename="..." o filename*=UTF-8''...)
+    function nomeZipDaHeaders(raw) {
+        const riga = String(raw || '').split(/\r?\n/).find(l => /^content-disposition\s*:/i.test(l)) || '';
+        const m = /filename\*?=(?:UTF-8'')?"?([^";\r\n]+)"?/i.exec(riga);
+        return m ? decodeURIComponent(m[1].trim()) : null;
+    }
+
+    // Data del dataset pubblicato, senza scaricarlo: appena arrivano le intestazioni la richiesta
+    // si chiude. Se il server ignorasse il Range e mandasse il file intero, la chiusura lo ferma.
+    function dataDatasetRemoto(reg) {
+        return new Promise((resolve, reject) => {
+            if (typeof GM_xmlhttpRequest !== 'function') { reject(new Error('GM_xmlhttpRequest non disponibile')); return; }
+            let finito = false, req = null;
+            const chiudi = (raw) => {
+                if (finito) return;
+                finito = true;
+                try { if (req && req.abort) req.abort(); } catch { /* gia' chiusa */ }
+                const nome = nomeZipDaHeaders(raw);
+                resolve({ nome, data: extractDateFromFilename(nome) });
+            };
+            req = GM_xmlhttpRequest({
+                method: 'GET', url: ANNCSU_DL + reg, timeout: 20000, headers: { Range: 'bytes=0-0' },
+                onreadystatechange: r => { if (r.readyState >= 2 && r.responseHeaders && /content-disposition/i.test(r.responseHeaders)) chiudi(r.responseHeaders); },
+                onload: r => { if (r.status >= 200 && r.status < 300) chiudi(r.responseHeaders); else if (!finito) { finito = true; reject(new Error('HTTP ' + r.status)); } },
+                onerror: () => { if (!finito) { finito = true; reject(new Error('errore di rete')); } },
+                ontimeout: () => { if (!finito) { finito = true; reject(new Error('timeout')); } }
+            });
+        });
+    }
+
+    // Regioni in locale con un dataset pubblicato piu' nuovo. Si confronta la data dello zip
+    // salvata allo scarico; per le regioni scaricate prima di questa versione si usa la data
+    // del file dentro lo zip, che ANNCSU scrive uguale (INDIR_PUGL_20260915.csv).
+    function regioniConDatasetNuovo(regs) {
+        const { remoti } = leggiControlliDataset();
+        return (regs || []).filter(r => {
+            const remoto = dataOrdinabile(remoti[r.reg]);
+            const locale = dataOrdinabile(r.zipDate || r.fileDate);
+            return remoto && locale && remoto > locale;
+        }).map(r => ({ reg: r.reg, nome: r.nomeReg || regNome(r.reg), locale: r.zipDate || r.fileDate, remoto: remoti[r.reg] }));
+    }
+
+    // Mette, cambia o toglie la notifica in base a quello che si sa ora: si richiama all'avvio,
+    // dopo ogni controllo e dopo ogni scarico (passa da markUpdateDue). Nessuna chiamata di rete.
+    async function aggiornaAvvisoDataset(regs) {
+        const client = await avvisi;
+        if (!client) return;
+        try {
+            const nuove = regioniConDatasetNuovo(regs);
+            const gia = client.notification.list().find(n => n.id === 'dataset');
+            if (!nuove.length) { if (gia) client.notification.remove('dataset'); return; }
+            const chiave = nuove.map(n => `${n.reg}:${n.remoto}`).sort().join(',');
+            if (gia && gia.data && gia.data.chiave === chiave) return;   // stessa notifica: non torna "nuova"
+            const elenco = nuove.map(n => `${n.nome} (dataset del ${n.remoto}, tu hai quello del ${n.locale})`).join('; ');
+            client.notification.add({
+                id: 'dataset',
+                title: nuove.length === 1 ? `Nuovi dati ANNCSU: ${nuove[0].nome}` : `Nuovi dati ANNCSU per ${nuove.length} regioni`,
+                message: `ANNCSU ha pubblicato dati piu' recenti di quelli che hai in locale: ${elenco}. Premi Aggiorna per riscaricare ${pl(nuove.length, 'la regione', 'queste regioni')}: lo scarico parte solo adesso, e puoi fermarlo dal pannello.`,
+                buttonText: 'Aggiorna',
+                action: 'riscarica-dataset',
+                data: { chiave, regs: nuove.map(n => n.reg) }
+            });
+        } catch (e) { log('avviso nuovi dati non aggiornato:', e.message); }
+    }
+
+    // Il bottone della notifica: riscarica le regioni (ripreso dalla lista attuale, non da quella
+    // salvata nella notifica, che puo' essere di qualche giorno fa)
+    async function riscaricaDaNotifica() {
+        const client = await avvisi;
+        const avvisa = t => { try { if (client) client.snackbar.show(t); } catch { /* niente */ } toast(t, 7000); };
+        if (!authInfo || !authInfo.ok) { avvisa(`${SCRIPT_NAME}: lo scarico non e' disponibile finche' l'abilitazione non e' verificata.`); return; }
+        if (busy) { avvisa(`${SCRIPT_NAME}: c'e' gia' uno scarico in corso, riprova quando finisce.`); return; }
+        const regs = await idb.all('regioni');
+        const list = regioniConDatasetNuovo(regs).map(n => n.reg);
+        if (!list.length) { aggiornaAvvisoDataset(regs); return; }
+        await downloadRegions(list, 'Scarico i nuovi dati ANNCSU', ui.aggiorna);
+    }
+
+    // Il controllo vero: 1 byte per regione in locale, una regione alla volta, al massimo una
+    // volta ogni DATASET_CHECK_H ore (il momento dell'ultimo controllo vale per tutte le schede).
+    let datasetCheckInCorso = false;
+    async function controllaNuoviDataset(forza) {
+        if (datasetCheckInCorso || !authInfo || !authInfo.ok) return;
+        const stato = leggiControlliDataset();
+        if (!forza && Date.now() - stato.ts < DATASET_CHECK_H * 3600000) return;
+        datasetCheckInCorso = true;
+        try {
+            const regs = await idb.all('regioni');
+            if (!regs.length) return;
+            const remoti = Object.assign({}, stato.remoti);
+            let letti = 0;
+            for (const r of regs) {
+                try {
+                    const d = await dataDatasetRemoto(r.reg);
+                    if (d.data) { remoti[r.reg] = d.data; letti++; }
+                    else log(`dataset ${r.reg}: data non riconosciuta nel nome "${d.nome || '?'}"`);
+                } catch (e) { log(`dataset ${r.reg}: controllo non riuscito (${e.message})`); }
+            }
+            // se non ha risposto nessuna regione si riprova al prossimo avvio, non fra un giorno
+            if (letti) { try { localStorage.setItem(DSCHECK_KEY, JSON.stringify({ ts: Date.now(), remoti })); } catch { /* pazienza */ } }
+            const nuove = regioniConDatasetNuovo(regs);
+            log(`controllo nuovi dataset: ${letti}/${regs.length} regioni lette, ${nuove.length} con dati nuovi`, nuove);
+            markUpdateDue(regs);   // aggiorna il bottone Aggiorna e la notifica
+        } finally { datasetCheckInCorso = false; }
+    }
+
+    // Accende il bottone "Aggiorna" quando almeno una regione in locale ha passato STALE_DAYS
+    // o ha un dataset piu' nuovo pubblicato da ANNCSU: e' solo un promemoria, lo scarico resta
+    // sempre una scelta dell'editor. Da qui passa anche la notifica nella campanella.
     function markUpdateDue(regs) {
+        aggiornaAvvisoDataset(regs);
         if (!ui.aggiorna) return;
         const vecchie = (regs || []).filter(r => r.quando && (Date.now() - r.quando) / 86400000 > STALE_DAYS);
-        const due = vecchie.length > 0;
+        const nuove = regioniConDatasetNuovo(regs);
+        const due = vecchie.length > 0 || nuove.length > 0;
         ui.aggiorna.classList.toggle('wfit-due', due);
-        if (due) {
+        if (nuove.length) {
+            ui.aggiorna.title = `ANNCSU ha pubblicato dati nuovi per ${nuove.map(n => `${n.nome} (dataset del ${n.remoto})`).join(', ')}: premi per riscaricare.`;
+        } else if (due) {
             const g = Math.max(...vecchie.map(r => Math.floor((Date.now() - r.quando) / 86400000)));
             ui.aggiorna.title = `Sono passati ${g} giorni dallo scarico di ${vecchie.map(r => r.nomeReg || r.reg).join(', ')}: ANNCSU aggiorna i dataset ogni mese, conviene riscaricare.`;
         } else {
@@ -1783,8 +1923,12 @@
     // onProgress(frazione 0..1, testo) permette al chiamante di comporre una barra complessiva.
     async function fetchRegionRecord(reg, onProgress) {
         const nome = regNome(reg);
+        // nome dello zip (indirizzarioPuglia20260915.zip): la sua data e' quella che il controllo
+        // dei nuovi dataset confronta con quella pubblicata
+        let zipName = null;
         const buf = await gmFetchBinary(ANNCSU_DL + reg,
-            p => onProgress(p * 0.45, `Scarico indirizzario ${nome}\u2026 ${Math.round(p * 100)}%`));
+            p => onProgress(p * 0.45, `Scarico indirizzario ${nome}\u2026 ${Math.round(p * 100)}%`),
+            undefined, h => { zipName = nomeZipDaHeaders(h); });
         onProgress(0.45, `Elaboro ${nome}\u2026`);
 
         // Nome del file CSV dentro lo ZIP: l'Agenzia ci scrive la data di creazione dell'estratto
@@ -1802,6 +1946,8 @@
         const rec = await parseIndirToRecord(new Uint8Array(buf), reg, nome,
             (p, read, kept) => onProgress(0.45 + p * 0.55, `Elaboro ${nome}\u2026 ${Math.round(p * 100)}% &middot; lette ${fmtN(read)} &middot; con coordinate ${fmtN(kept)}`));
         rec.fileDate = fileDate;
+        rec.zipName = zipName;
+        rec.zipDate = extractDateFromFilename(zipName);
         if (rec.count) await idb.put('regioni', rec);
         return rec;
     }
@@ -2304,13 +2450,17 @@
     /* Rete                                                                */
     /* ------------------------------------------------------------------ */
 
-    function gmFetchBinary(url, onProgress, timeoutMs = 600000) {
+    function gmFetchBinary(url, onProgress, timeoutMs = 600000, onHeaders = null) {
         return new Promise((resolve, reject) => {
             if (typeof GM_xmlhttpRequest !== 'function') { reject(new Error('GM_xmlhttpRequest non disponibile')); return; }
             GM_xmlhttpRequest({
                 method: 'GET', url, responseType: 'arraybuffer', timeout: timeoutMs,
                 onprogress: e => { if (onProgress && e.total) onProgress(e.loaded / e.total); },
-                onload: r => (r.status >= 200 && r.status < 300) ? resolve(r.response) : reject(new Error('HTTP ' + r.status)),
+                onload: r => {
+                    if (r.status < 200 || r.status >= 300) { reject(new Error('HTTP ' + r.status)); return; }
+                    if (onHeaders) { try { onHeaders(r.responseHeaders); } catch { /* intestazioni facoltative */ } }
+                    resolve(r.response);
+                },
                 onerror: () => reject(new Error('errore di rete')),
                 ontimeout: () => reject(new Error('timeout'))
             });

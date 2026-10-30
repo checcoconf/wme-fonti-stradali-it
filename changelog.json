@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "date": "2026-10-30",
     "changes": {
-      "it": "<ul><li><b>Prima versione ufficiale</b> di WME Fonti Stradali IT.</li><li><b>Avvisi di aggiornamento</b>: quando esce una nuova versione lo script te lo dice subito, con una notifica nella campanella del WME (bottone <b>Aggiorna</b>) e un bottone verde accanto alla versione nel pannello. Dopo l'installazione basta ricaricare l'editor (F5).</li><li><b>Novit&agrave; di ogni versione</b>: dopo un aggiornamento trovi nella campanella cosa &egrave; cambiato. Si riaprono anche cliccando il numero di versione nel pannello.</li><li>Le notifiche sono condivise tra WME e WME beta: l'avviso arriva una volta sola.</li></ul>"
+      "it": "<ul><li><b>Prima versione ufficiale</b> di WME Fonti Stradali IT.</li><li><b>Avvisi di aggiornamento</b>: quando esce una nuova versione lo script te lo dice subito, con una notifica nella campanella del WME (bottone <b>Aggiorna</b>) e un bottone verde accanto alla versione nel pannello. Dopo l'installazione basta ricaricare l'editor (F5).</li><li><b>Nuovi dati ANNCSU nella campanella</b>: una volta al giorno lo script guarda se ANNCSU ha pubblicato un dataset pi&ugrave; recente per le regioni che hai gi&agrave; scaricato. Se s&igrave;, arriva una notifica con il bottone <b>Aggiorna</b> che le riscarica (solo quando lo premi) e si accende il pulsante <i>Aggiorna</i> del pannello. Il controllo pesa pochi byte, non scarica i dati.</li><li><b>Novit&agrave; di ogni versione</b>: dopo un aggiornamento trovi nella campanella cosa &egrave; cambiato. Si riaprono anche cliccando il numero di versione nel pannello.</li><li>Le notifiche sono condivise tra WME e WME beta: l'avviso arriva una volta sola.</li></ul>"
     }
   }
 ]
