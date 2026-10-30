@@ -49,15 +49,17 @@ dubbio: *Tampermonkey → Utility → Controlla aggiornamenti degli userscript*.
   l'installazione in Tampermonkey;
 - accanto al numero di versione, nel pannello, compare il bottone verde **Aggiorna a vX**.
 
-Dopo l'installazione ricarica l'editor (F5). Nella campanella trovi poi le **novità** della versione;
+Conferma l'installazione in Tampermonkey e torna sul WME: la pagina **si ricarica da sola** e la nuova
+versione entra in funzione. Se hai modifiche non salvate aspetta che tu le salvi, se c'è un download in
+corso aspetta che finisca. Nella campanella trovi poi le **novità** della versione;
 si riaprono anche cliccando il numero di versione nel pannello. Gli avvisi passano da
 [WME Alert System](https://greasyfork.org/scripts/602363), la libreria condivisa con altri script
 WME: le notifiche non si accavallano e WME e WME beta le condividono.
 
 **Nuovi dati ANNCSU.** Una volta al giorno lo script guarda se ANNCSU ha pubblicato un dataset più
-recente per le regioni che hai già in locale. Non scarica i dati: legge solo la data nel nome del file
+recente per le regioni che hai già in locale. Non effettua il download dei dati: legge solo la data nel nome del file
 pubblicato (pochi byte). Se una regione è più vecchia, nella campanella arriva la notifica con il
-bottone **Aggiorna**, che riscarica solo quelle regioni, e il pulsante *Aggiorna* del pannello si
+bottone **Aggiorna**, che effettua nuovamente il download solo di quelle regioni, e il pulsante *Aggiorna* del pannello si
 accende di verde. Il download parte solo quando premi tu.
 
 **Requisiti**
@@ -128,7 +130,7 @@ Sezione **Dati ANNCSU** del pannello.
 | **Aggiorna** | riscarica solo le regioni che hai già in locale |
 | **Svuota dati** | cancella tutte le regioni salvate e riparte da zero |
 
-Durante uno scarico multiplo il pulsante diventa **Ferma**: il ciclo si interrompe alla fine della
+Durante un download multiplo il pulsante diventa **Ferma**: il ciclo si interrompe alla fine della
 regione in corso, senza lasciare dati a metà.
 
 **Freschezza dei dati.** ANNCSU aggiorna i dataset regionali con **cadenza mensile**, e in questo

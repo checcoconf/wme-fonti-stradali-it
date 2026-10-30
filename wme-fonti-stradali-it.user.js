@@ -327,9 +327,9 @@
     // Perche' la configurazione non va bene: messaggio che dice cosa ha letto davvero lo script
     function gasConfigProblema() {
         const u = gasUrl();
-        if (!u || /^INCOLLA/i.test(u)) return 'la riga GAS_URL e\' ancora quella di esempio: apri lo script in Tampermonkey e incolla l\'indirizzo che finisce con /exec.';
+        if (!u || /^INCOLLA/i.test(u)) return 'la riga GAS_URL \u00e8 ancora quella di esempio: apri lo script in Tampermonkey e incolla l\'indirizzo che finisce con /exec.';
         if (/\/dev$/.test(u)) return 'hai incollato l\'indirizzo di prova (/dev): serve quello della distribuzione, che finisce con /exec.';
-        if (!/^https:\/\/script\.google\.com\//.test(u)) return `l'indirizzo non e' quello di un web app Apps Script (letto: ${u.slice(0, 60)}).`;
+        if (!/^https:\/\/script\.google\.com\//.test(u)) return `l'indirizzo non \u00e8 quello di una web app di Apps Script (letto: ${u.slice(0, 60)}).`;
         if (!/\/exec$/.test(u)) return `l'indirizzo non finisce con /exec (letto: ${u.slice(0, 60)}\u2026).`;
         return `indirizzo non riconosciuto (letto: ${u.slice(0, 60)}\u2026).`;
     }
@@ -342,7 +342,7 @@
     // preflight; il corpo resta comunque JSON.
     function gasCall(payload, timeoutMs = GAS_TIMEOUT_MS) {
         return new Promise((resolve, reject) => {
-            if (!gasConfigured()) { reject(new Error('web app non configurato')); return; }
+            if (!gasConfigured()) { reject(new Error('web app non configurata')); return; }
             try {
                 GM_xmlhttpRequest({
                     method: 'POST',
@@ -401,10 +401,10 @@
         ['DataModel.Streets.getStreet', 'trova la via', true],
         ['DataModel.Streets.addStreet', 'crea la via', true],
         ['DataModel.Streets.getById', 'nome della via (sigle, riepiloghi)', true],
-        ['DataModel.Cities.getAll', 'citta\' e citta\' vuota "Nessuno"', true],
-        ['DataModel.Cities.getById', 'nome della citta\'', false],
+        ['DataModel.Cities.getAll', 'citt\u00e0 e citt\u00e0 vuota "Nessuno"', true],
+        ['DataModel.Cities.getById', 'nome della citt\u00e0', false],
         ['DataModel.HouseNumbers.addHouseNumber', 'inserimento dei civici', true],
-        ['DataModel.HouseNumbers.getHouseNumbers', 'civici gia\' su Waze (doppioni)', true],
+        ['DataModel.HouseNumbers.getHouseNumbers', 'civici gi\u00e0 su Waze (doppioni)', true],
         ['DataModel.Venues.getAll', 'luoghi residenziali (RPP)', false],
         ['DataModel.Venues.getAddress', 'indirizzo dei luoghi residenziali', false],
         ['Editing.getSelection', 'cattura dei segmenti', true],
@@ -419,7 +419,7 @@
         ['Map.removeAllFeaturesFromLayer', 'pulizia della mappa', true],
         ['Map.setMapCenter', 'centratura sui civici', true],
         ['Map.getMapCenter', '"+ Aggiungi al centro mappa"', true],
-        ['Map.getZoomLevel', 'consiglio di zoom per i civici gia\' su Waze', false],
+        ['Map.getZoomLevel', 'consiglio di zoom per i civici gi\u00e0 su Waze', false],
         ['Map.setLayerZIndex', 'civici sopra gli altri evidenziatori', false],
         ['Map.getLayerZIndex', 'civici sopra gli altri evidenziatori', false],
         ['Map.setLayerVisibility', 'livello acceso', false],
@@ -490,7 +490,7 @@
             return { ok: false, code: 500, user: u.name, reason: gasConfigProblema() };
         }
         if (!gasToken() || /^INCOLLA/i.test(gasToken())) {
-            return { ok: false, code: 500, user: u.name, reason: 'la riga GAS_TOKEN e\' ancora quella di esempio: incolla il token stampato da setup() sul foglio.' };
+            return { ok: false, code: 500, user: u.name, reason: 'la riga GAS_TOKEN \u00e8 ancora quella di esempio: incolla il token stampato da setup() sul foglio.' };
         }
         const cached = readAuthCache(u.name);
         if (!force && cached && cached.ok && Date.now() - cached.ts < AUTH_TTL_H * 3600000) {
@@ -527,7 +527,7 @@
   <div class="wfit-sec wfit-bloc wfit-bloc-no">
     <div class="wfit-bloccode">Abilitazione non presente</div>
     ${utente}
-    <p>Questo script &egrave; riservato agli editor abilitati, e il tuo nome non risulta nell'elenco.</p>
+    <p>Questo script &egrave; riservato agli editor abilitati e il tuo nome non risulta nell'elenco.</p>
     ${dettaglio}
     <div class="wfit-row">
       <button class="wfit-btn wfit-primary" id="wfit-auth-retry">Ho ricevuto l'abilitazione: ricontrolla</button>
@@ -815,7 +815,7 @@
                 return;
             }
         } catch (e) {
-            log('log non inviati (riprovo piu\' tardi):', e.message);
+            log('log non inviati (riprovo pi\u00f9 tardi):', e.message);
         } finally {
             logFlushing = false;
             if (logQueue.length) scheduleLogFlush(60000);
@@ -921,13 +921,13 @@
     async function caricaChangelog() {
         try {
             const voci = JSON.parse(await gmGetText(CHANGELOG_URL));
-            if (!Array.isArray(voci)) throw new Error('changelog.json non e\' un elenco');
+            if (!Array.isArray(voci)) throw new Error('changelog.json non \u00e8 un elenco');
             return voci.filter(v => v && versioneValida(v.version) && v.changes).map(v => {
                 const testo = v.changes.it || v.changes.default || '';
                 return { version: String(v.version), date: v.date || '', changes: Object.assign({}, v.changes, { it: testo, default: testo }) };
             });
         } catch (e) {
-            log('novita\' non caricate:', e.message);
+            log('novit\u00e0 non caricate:', e.message);
             return [];
         }
     }
@@ -981,19 +981,68 @@
         if (!client || giaAvvisato) return;   // al ricontrollo periodico non si ripete lo snackbar
 
         try {
-            client.snackbar.show(`${SCRIPT_NAME} v${ultima} disponibile: aggiorna dalla notifica nella campanella, poi ricarica la pagina (F5).`);
+            client.snackbar.show(`${SCRIPT_NAME} v${ultima} disponibile: aggiorna dalla notifica nella campanella.`);
             // stesso id = stessa notifica: non torna "nuova" a ogni avvio
             const gia = client.notification.list().find(n => n.id === 'update');
             if (gia && gia.data && gia.data.version === ultima) return;
             client.notification.add({
                 id: 'update',
                 title: `${SCRIPT_NAME} v${ultima} disponibile`,
-                message: `E' uscita una nuova versione di ${SCRIPT_NAME}. Premi Aggiorna: Tampermonkey apre la pagina di installazione. Dopo l'installazione ricarica il Waze Map Editor (F5) perche' la nuova versione entri in funzione.`,
+                message: `\u00c8 uscita una nuova versione di ${SCRIPT_NAME}. Premi Aggiorna e conferma l'installazione in Tampermonkey: quando torni sul WME la pagina si ricarica da sola e la nuova versione entra in funzione. Se hai modifiche non salvate, il WME aspetta che tu le salvi.`,
                 buttonText: 'Aggiorna',
-                buttonURL: INSTALL_URL,
+                action: 'installa-aggiornamento',
                 data: { version: ultima }
             });
         } catch (e) { log('avviso di aggiornamento non mostrato:', e.message); }
+    }
+
+    // Ricarica automatica dopo l'aggiornamento. Tampermonkey installa la nuova versione, ma la
+    // pagina aperta continua a usare quella vecchia finche' non si ricarica: lo fa lo script.
+    // Quando premi Aggiorna (nella campanella o nel pannello) si apre l'installazione; appena
+    // torni sul WME la pagina si ricarica da sola. Non si perde niente: se ci sono modifiche
+    // non salvate aspetta il salvataggio, se c'e' un download in corso aspetta che finisca.
+    let ricaricaArmata = false;
+    async function installaAggiornamento() {
+        const w = window.open(INSTALL_URL, '_blank');
+        if (w) { try { w.opener = null; } catch { /* niente */ } armaRicarica(); return; }
+        // finestra bloccata dal browser: resta il bottone verde nel pannello, che e' un link vero
+        const client = await avvisi;
+        const t = `${SCRIPT_NAME}: il browser ha bloccato l'apertura dell'installazione. Usa il bottone verde "Aggiorna" accanto alla versione, nel pannello dello script.`;
+        try { if (client) client.snackbar.show(t); } catch { /* niente */ }
+        toast(t, 9000);
+    }
+    function armaRicarica() {
+        if (ricaricaArmata) return;
+        ricaricaArmata = true;
+        const partenza = Date.now();
+        const alRitorno = () => {
+            // il WME torna in primo piano: si e' chiusa (o lasciata) la pagina di installazione
+            if (document.visibilityState !== 'visible' || Date.now() - partenza < 2000) return;
+            document.removeEventListener('visibilitychange', alRitorno);
+            window.removeEventListener('focus', alRitorno);
+            ricaricaQuandoSicuro();
+        };
+        document.addEventListener('visibilitychange', alRitorno);
+        window.addEventListener('focus', alRitorno);
+    }
+    const modificheNonSalvate = () => { try { return sdk.Editing.getUnsavedChangesCount() || 0; } catch { return 0; } };
+    async function ricaricaQuandoSicuro() {
+        const client = await avvisi;
+        const avvisa = t => { try { if (client) client.snackbar.show(t); } catch { /* niente */ } toast(t, 8000); };
+        let avvisato = false;
+        while (modificheNonSalvate() > 0 || busy) {
+            if (!avvisato) {
+                avvisato = true;
+                avvisa(modificheNonSalvate() > 0
+                    ? `${SCRIPT_NAME}: salva le modifiche (Ctrl+S); subito dopo il WME si ricarica da solo per attivare la nuova versione.`
+                    : `${SCRIPT_NAME}: appena finisce il download in corso il WME si ricarica da solo per attivare la nuova versione.`);
+            }
+            await sleep(2000);
+        }
+        avvisa(`${SCRIPT_NAME}: ricarico il WME per attivare la nuova versione…`);
+        saveLogQueue();
+        await sleep(1500);
+        location.reload();
     }
 
     // Parte subito dopo l'SDK, PRIMA della verifica dell'abilitazione: anche chi e' bloccato
@@ -1003,6 +1052,8 @@
         avvisi = registraAvvisi();
         // il bottone "Aggiorna" della notifica dei nuovi dati ANNCSU: va registrato a ogni avvio
         avvisi.then(c => {
+            try { if (c) c.notification.onAction('installa-aggiornamento', () => installaAggiornamento()); }
+            catch (e) { log('azione della notifica di aggiornamento non registrata:', e.message); }
             try { if (c) c.notification.onAction('riscarica-dataset', () => riscaricaDaNotifica().catch(e => log('riscarico da notifica KO', e))); }
             catch (e) { log('azione della notifica dati non registrata:', e.message); }
         });
@@ -1025,16 +1076,17 @@
                 b.href = INSTALL_URL;
                 b.target = '_blank';
                 b.rel = 'noopener noreferrer';
+                b.addEventListener('click', armaRicarica);   // il link apre l'installazione, qui si arma la ricarica
                 box.appendChild(b);
             }
             b.textContent = `Aggiorna a v${nuovaVersione}`;
-            b.title = 'Apre l\'installazione in Tampermonkey; poi ricarica il WME (F5)';
+            b.title = 'Apre l\'installazione in Tampermonkey: quando torni sul WME la pagina si ricarica da sola';
         });
     }
 
     async function apriNovita() {
         const client = await avvisi;
-        if (client) { try { await client.changelog.show(); return; } catch (e) { log('novita\' non aperte:', e.message); } }
+        if (client) { try { await client.changelog.show(); return; } catch (e) { log('novit\u00e0 non aperte:', e.message); } }
         window.open(RELEASES_URL, '_blank', 'noopener');
     }
 
@@ -1247,7 +1299,7 @@
             client.notification.add({
                 id: 'dataset',
                 title: nuove.length === 1 ? `Nuovi dati ANNCSU: ${nuove[0].nome}` : `Nuovi dati ANNCSU per ${nuove.length} regioni`,
-                message: `ANNCSU ha pubblicato dati piu' recenti di quelli che hai in locale: ${elenco}. Premi Aggiorna per riscaricare ${pl(nuove.length, 'la regione', 'queste regioni')}: lo scarico parte solo adesso, e puoi fermarlo dal pannello.`,
+                message: `ANNCSU ha pubblicato dati pi\u00f9 recenti di quelli che hai in locale: ${elenco}. Premi Aggiorna per effettuare nuovamente il download di ${pl(nuove.length, 'questa regione', 'queste regioni')}: il download parte solo quando premi il pulsante e puoi interromperlo dal pannello.`,
                 buttonText: 'Aggiorna',
                 action: 'riscarica-dataset',
                 data: { chiave, regs: nuove.map(n => n.reg) }
@@ -1260,12 +1312,12 @@
     async function riscaricaDaNotifica() {
         const client = await avvisi;
         const avvisa = t => { try { if (client) client.snackbar.show(t); } catch { /* niente */ } toast(t, 7000); };
-        if (!authInfo || !authInfo.ok) { avvisa(`${SCRIPT_NAME}: lo scarico non e' disponibile finche' l'abilitazione non e' verificata.`); return; }
-        if (busy) { avvisa(`${SCRIPT_NAME}: c'e' gia' uno scarico in corso, riprova quando finisce.`); return; }
+        if (!authInfo || !authInfo.ok) { avvisa(`${SCRIPT_NAME}: il download non \u00e8 disponibile finch\u00e9 l'abilitazione non \u00e8 verificata.`); return; }
+        if (busy) { avvisa(`${SCRIPT_NAME}: c'\u00e8 gi\u00e0 un download in corso, riprova quando finisce.`); return; }
         const regs = await idb.all('regioni');
         const list = regioniConDatasetNuovo(regs).map(n => n.reg);
         if (!list.length) { aggiornaAvvisoDataset(regs); return; }
-        await downloadRegions(list, 'Scarico i nuovi dati ANNCSU', ui.aggiorna);
+        await downloadRegions(list, 'Download dei nuovi dati ANNCSU', ui.aggiorna);
     }
 
     // Il controllo vero: 1 byte per regione in locale, una regione alla volta, al massimo una
@@ -1307,12 +1359,12 @@
         const due = vecchie.length > 0 || nuove.length > 0;
         ui.aggiorna.classList.toggle('wfit-due', due);
         if (nuove.length) {
-            ui.aggiorna.title = `ANNCSU ha pubblicato dati nuovi per ${nuove.map(n => `${n.nome} (dataset del ${n.remoto})`).join(', ')}: premi per riscaricare.`;
+            ui.aggiorna.title = `ANNCSU ha pubblicato dati nuovi per ${nuove.map(n => `${n.nome} (dataset del ${n.remoto})`).join(', ')}: premi per effettuare nuovamente il download.`;
         } else if (due) {
             const g = Math.max(...vecchie.map(r => Math.floor((Date.now() - r.quando) / 86400000)));
-            ui.aggiorna.title = `Sono passati ${g} giorni dallo scarico di ${vecchie.map(r => r.nomeReg || r.reg).join(', ')}: ANNCSU aggiorna i dataset ogni mese, conviene riscaricare.`;
+            ui.aggiorna.title = `Sono passati ${g} giorni dal download di ${vecchie.map(r => r.nomeReg || r.reg).join(', ')}: ANNCSU aggiorna i dataset ogni mese, conviene effettuare nuovamente il download.`;
         } else {
-            ui.aggiorna.title = "Riscarica le regioni che hai gia' in locale, per prendere i dataset ANNCSU piu' recenti";
+            ui.aggiorna.title = "Scarica di nuovo le regioni che hai gi\u00e0 in locale, per avere i dataset ANNCSU pi\u00f9 recenti";
         }
     }
 
@@ -1461,8 +1513,8 @@
 #wfit-panel .wfit-hnrev { margin-top:7px; border-top:1px dashed #d8d8d8; padding-top:6px; }
 #wfit-panel .wfit-hnrev .wfit-hnlist { container:wfitlist / inline-size; max-height:260px; overflow:auto; margin:4px 0; border:1px solid #eee; border-radius:7px; padding:3px 4px; }
 /* riga civico come nella 0.3.5: spunta, numero, distanza, Street View (e RPP), tutto su una riga.
-   Lo stato e' il bordo colorato a sinistra (legenda sopra l'elenco). La nota corta sta nello spazio
-   libero fra numero e distanza solo se l'elenco e' abbastanza largo da contenerla; altrimenti la
+   Lo stato \u00e8 il bordo colorato a sinistra (legenda sopra l'elenco). La nota corta sta nello spazio
+   libero fra numero e distanza solo se l'elenco \u00e8 abbastanza largo da contenerla; altrimenti la
    trovi in cima al suggerimento della riga, passando il mouse. */
 #wfit-panel .wfit-hnrow { padding:3px 4px 3px 7px; border-radius:6px; cursor:pointer; border-left:3px solid transparent; }
 #wfit-panel .wfit-hnrow:hover { background:#f2f6fc; }
@@ -1501,7 +1553,7 @@
 #wfit-panel .wfit-suspmode.wfit-on { background:#2b3138; border-color:#2b3138; color:#fff; font-weight:600; }
 #wfit-panel .wfit-hnleg { display:flex; flex-wrap:wrap; align-items:flex-start; gap:3px 12px; margin:3px 0 0; font-size:11px; }
 /* voce di legenda: il pallino non si stringe mai, il testo va a capo dentro la voce e la voce
-   intera scende sotto quando nella riga non ci sta piu' */
+   intera scende sotto quando nella riga non ci sta pi\u00f9 */
 #wfit-panel .wfit-legitem { display:inline-flex; align-items:flex-start; max-width:100%; line-height:1.35; }
 #wfit-panel .wfit-legitem .wfit-swatch { flex:0 0 auto; margin-top:2px; }
 #wfit-panel .wfit-hnscan { margin:4px 0 0; font-size:11px; font-style:italic; line-height:1.35; overflow-wrap:anywhere; }
@@ -1533,12 +1585,12 @@
   #wfit-panel .wfit-actions .wfit-btn { flex:1 1 100%; white-space:normal; }
   #wfit-panel .wfit-head .t { font-size:14px; }
 }
-/* Sidebar larga: un filo piu' d'aria */
+/* Sidebar larga: un filo pi\u00f9 d'aria */
 @container (min-width: 380px) {
   #wfit-panel { font-size:12.5px; }
   #wfit-panel .wfit-res { padding:9px 10px; }
 }
-/* Dispositivi touch: bersagli piu' grandi */
+/* Dispositivi touch: bersagli pi\u00f9 grandi */
 @media (pointer: coarse) {
   #wfit-panel { font-size:13px; }
   #wfit-panel button.wfit-btn { padding:8px 12px; }
@@ -1547,7 +1599,7 @@
   #wfit-panel .wfit-chip { font-size:11.5px; padding:4px 8px 4px 11px; }
   #wfit-panel .wfit-x { padding:0 4px; }
   #wfit-panel input[type=checkbox], #wfit-panel input[type=radio] { transform:scale(1.25); margin-right:4px; }
-  /* la riga dei tre bottoni dati resta comunque su una riga sola, solo piu' compatta */
+  /* la riga dei tre bottoni dati resta comunque su una riga sola, solo pi\u00f9 compatta */
   #wfit-panel .wfit-row.wfit-nowrap button.wfit-btn { padding:8px 4px; font-size:12px; }
 }
 `;
@@ -1568,7 +1620,7 @@
   <details><summary class="wfit-muted">Altre opzioni dati</summary>
     <div class="wfit-row wfit-nowrap">
       <button class="wfit-btn" id="wfit-scarica-tutte" title="Scarica una dopo l'altra tutte e 20 le regioni: ci vogliono alcuni minuti e parecchia memoria">Scarica tutte</button>
-      <button class="wfit-btn" id="wfit-aggiorna" title="Riscarica le regioni che hai gia' in locale, per prendere i dataset ANNCSU piu' recenti">Aggiorna</button>
+      <button class="wfit-btn" id="wfit-aggiorna" title="Scarica di nuovo le regioni che hai gi\u00e0 in locale, per avere i dataset ANNCSU pi\u00f9 recenti">Aggiorna</button>
       <button class="wfit-btn" id="wfit-svuota-cache" title="Cancella tutte le regioni salvate in locale">Svuota dati</button>
     </div>
   </details>
@@ -1610,7 +1662,7 @@
     </select>
   </div>
   <div class="wfit-row">
-    <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="1" max="50" step="1" style="max-width:70px" title="Distanza massima civico-segmento per il confronto (da 1 a 50 m, predefinito 10). Oltre i 45 m Waze rifiuta i civici, quindi un raggio piu' largo non servirebbe. Nota: i punti ANNCSU stanno su edifici/ingressi, spesso 5-20 m dall'asse strada: con raggi molto stretti potresti perdere civici legittimi, con raggi larghi tirare dentro le vie vicine.">
+    <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="1" max="50" step="1" style="max-width:70px" title="Distanza massima civico-segmento per il confronto (da 1 a 50 m, predefinito 10). Oltre i 45 m Waze rifiuta i civici, quindi un raggio pi\u00f9 largo non servirebbe. Nota: i punti ANNCSU stanno su edifici/ingressi, spesso a 5-20 m dall'asse della strada: con raggi molto stretti potresti perdere civici legittimi, con raggi larghi includere anche le vie vicine.">
     <label><input type="checkbox" id="wfit-titlecase"> Formato Waze</label>
   </div>
   <div class="wfit-row">
@@ -1618,7 +1670,7 @@
     <label title="Dopo ogni cattura con il tasto (ALT + clic, o la combinazione che hai scelto) la barra laterale passa da sola a Script &rarr; Fonti IT e scorre fino ai Risultati, dove vedi nomi e civici dei segmenti in lista. Spegnila se preferisci restare sulla sezione in cui stai lavorando."><input type="checkbox" id="wfit-apri"> Apri i risultati</label>
     <label><input type="checkbox" id="wfit-dots"> Civici sulla mappa</label>
   </div>
-  <div class="wfit-row" id="wfit-dotsizerow" title="Quanto grandi disegnare i pallini dei civici e i loro numeri sulla mappa. Serve solo a vederci meglio: non cambia nulla di quello che finisce su Waze.">
+  <div class="wfit-row" id="wfit-dotsizerow" title="Dimensione dei pallini dei civici e dei loro numeri sulla mappa. Serve solo a vedere meglio: non cambia nulla di ci&ograve; che finisce su Waze.">
     <label>Pallini</label>
     <select id="wfit-dotsize">
       <option value="piccoli">Piccoli</option>
@@ -1628,10 +1680,10 @@
       <option value="enormi">Enormi</option>
     </select>
   </div>
-  <div class="wfit-row" title="Regola Waze Italia per i segmenti fuori dal centro abitato: nome primario con citt&agrave; vuota (Nessuno), nome alternativo con via + citt&agrave;">
+  <div class="wfit-row">
     <label>Applica come:</label>
-    <label><input type="radio" name="wfit-am" id="wfit-am-urb" value="urb"> Dentro il centro abitato (PN con citt&agrave;)</label>
-    <label><input type="radio" name="wfit-am" id="wfit-am-extra" value="extra"> Fuori centro abitato (PN senza citt&agrave; + AN con citt&agrave;)</label>
+    <label title="Regola Waze Italia per i segmenti dentro il centro abitato: nome primario con via e citt&agrave; (es. Via Roma, Milano)."><input type="radio" name="wfit-am" id="wfit-am-urb" value="urb"> Dentro il centro abitato (PN con citt&agrave;)</label>
+    <label title="Regola Waze Italia per i segmenti fuori dal centro abitato: nome primario con citt&agrave; vuota (Nessuno), nome alternativo con via e citt&agrave;. Si imposta anche l'obbligo di fari accesi."><input type="radio" name="wfit-am" id="wfit-am-extra" value="extra"> Fuori dal centro abitato (PN senza citt&agrave; + AN con citt&agrave;)</label>
   </div>
   <div class="wfit-row"><button class="wfit-btn wfit-primary" id="wfit-analizza" style="flex:1">&#128269; Confronta con ANNCSU</button></div>
   </div>
@@ -1643,12 +1695,12 @@
   </div>
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
-    <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia solo una parte &egrave; ancora geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). Sotto <b>Altre opzioni dati</b>, <b>Scarica tutte</b> le prende una dopo l'altra (alcuni minuti: te lo chiede prima di partire), mentre <b>Aggiorna</b> riscarica quelle che hai gi&agrave; in locale (e si accende di verde quando i tuoi dati hanno passato i 35 giorni); in tutti e due i casi il pulsante diventa <b>Ferma</b> e il ciclo si interrompe dopo la regione in corso. <b>Svuota dati</b> riparte da zero. I dati ANNCSU sono <b>open data</b> rilasciati con licenza ${licLink('Creative Commons Attribuzione 4.0 (CC-BY 4.0)')}: si possono riutilizzare anche su Waze, purch&eacute; sia citata la fonte.</p>
-    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Ri-clic lo toglie, la &times; sul chip pure, il clic sul chip lo seleziona nell&#39;editor. Dal menu <b>Cattura</b> puoi passare ad <b>ALT + MAIUSC</b>, <b>CTRL/&#8984; + ALT</b> o a un tasto a tua scelta (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione). Dopo ogni cattura, da qualunque sezione tu sia (Revisiona, Eventi, un altro script&hellip;), la barra laterale si porta da sola su <b>Script &rarr; Fonti IT</b> e scende fino ai <b>Risultati</b>: se sei gi&agrave; su Fonti IT scende ai Risultati solo se non li hai gi&agrave; davanti, altrimenti resta ferma, con nomi e civici dei segmenti in lista (se preferisci restare dove sei, togli la spunta <b>Apri i risultati</b>). Se preferisci selezionare nell&#39;editor e basta, usa <b>Aggiungi selezione attuale</b>: mette in lista tutto quello che hai selezionato, anche dopo una multi-selezione. I chip rossi indicano i segmenti dove l&#39;ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia per ora solo una parte &egrave; geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). Sotto <b>Altre opzioni dati</b>, <b>Scarica tutte</b> le prende una dopo l'altra (alcuni minuti: te lo chiede prima di partire), mentre <b>Aggiorna</b> riscarica quelle che hai gi&agrave; in locale (e si accende di verde quando i tuoi dati hanno passato i 35 giorni); in tutti e due i casi il pulsante diventa <b>Ferma</b> e il ciclo si interrompe dopo la regione in corso. <b>Svuota dati</b> riparte da zero. I dati ANNCSU sono <b>open data</b> rilasciati con licenza ${licLink('Creative Commons Attribuzione 4.0 (CC-BY 4.0)')}: si possono riutilizzare anche su Waze, purch&eacute; sia citata la fonte.</p>
+    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Un secondo clic lo toglie, cos&igrave; come la &times; sul chip; il clic sul chip lo seleziona nell&#39;editor. Dal menu <b>Cattura</b> puoi passare ad <b>ALT + MAIUSC</b>, <b>CTRL/&#8984; + ALT</b> o a un tasto a tua scelta (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione). Dopo ogni cattura, da qualunque sezione tu sia (Revisiona, Eventi, un altro script&hellip;), la barra laterale si porta da sola su <b>Script &rarr; Fonti IT</b> e scende fino ai <b>Risultati</b>: se sei gi&agrave; su Fonti IT scende ai Risultati solo se non li hai gi&agrave; davanti, altrimenti resta ferma, con nomi e civici dei segmenti in lista (se preferisci restare dove sei, togli la spunta <b>Apri i risultati</b>). Se preferisci selezionare nell&#39;editor e basta, usa <b>Aggiungi selezione attuale</b>: mette in lista tutto quello che hai selezionato, anche dopo una multi-selezione. I chip rossi indicano i segmenti dove l&#39;ultimo Applica &egrave; fallito.</p>
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il pulsante: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
-    <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Se i segmenti in lista su Waze hanno un <b>nome diverso</b> dall&#39;odonimo ANNCSU, la scheda lo dice con un <b>avviso rosso</b> (su Waze / ANNCSU a confronto) e prima di applicare ti chiede conferma; un nome solo <b>simile</b> (abbreviato, senza nome di battesimo) ha un avviso arancione. Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
-    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il pulsante con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato <b>numero/esponente maiuscolo</b>: <b>343/A</b>, <b>12/BIS</b> (anche TER e QUATER); se scrivi <b>75a</b> o <b>75 a</b> diventa <b>75/A</b>. Waze ora accetta qualsiasi formato: quelli insoliti (<b>20/1</b>) restano in lista <b>senza spunta</b>, col bordo ambra <b>da verificare</b>: se sul posto sono giusti li spunti tu e vengono inseriti. A <b>Genova, Savona e Firenze</b> lo script legge anche la numerazione <b>rossa e nera</b> (campo SPECIFICITA di ANNCSU): i neri restano come ovunque (<b>4, 4/A</b>, anche <b>3/R</b>), i rossi prendono la R (<b>3R, 3R/A</b>); in elenco vengono prima i neri e poi i rossi, e lato e sequenza si controllano separatamente per le due numerazioni. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il pulsante <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso, che prende il nome della via su cui si affaccia. Ogni civico sta su <b>una riga sola</b> (spunta, numero, distanza, Street View): lo stato lo dice il colore del bordo, spiegato nella legenda sopra l'elenco; se il pannello &egrave; largo compare anche una nota corta, e passando il mouse sulla riga leggi la spiegazione completa. Anche <b>fuori centro abitato</b> si inseriscono civici normali: li rende ricercabili il nome alternativo con la citt&agrave;. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
+    <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Se i segmenti in lista su Waze hanno un <b>nome diverso</b> dall&#39;odonimo ANNCSU, la scheda lo dice con un <b>avviso rosso</b> (su Waze / ANNCSU a confronto) e prima di applicare ti chiede conferma; un nome solo <b>simile</b> (abbreviato, senza nome di battesimo) ha un avviso arancione. Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori dal centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
+    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il pulsante con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato <b>numero/esponente maiuscolo</b>: <b>343/A</b>, <b>12/BIS</b> (anche TER e QUATER); se scrivi <b>75a</b> o <b>75 a</b> diventa <b>75/A</b>. Waze ora accetta qualsiasi formato: quelli insoliti (<b>20/1</b>) restano in lista <b>senza spunta</b>, col bordo ambra <b>da verificare</b>: se sul posto sono giusti li spunti tu e vengono inseriti. A <b>Genova, Savona e Firenze</b> lo script legge anche la numerazione <b>rossa e nera</b> (campo SPECIFICITA di ANNCSU): i neri restano come ovunque (<b>4, 4/A</b>, anche <b>3/R</b>), i rossi prendono la R (<b>3R, 3R/A</b>); in elenco vengono prima i neri e poi i rossi, e lato e sequenza si controllano separatamente per le due numerazioni. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il pulsante <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso, che prende il nome della via su cui si affaccia. Ogni civico sta su <b>una riga sola</b> (spunta, numero, distanza, Street View): lo stato lo dice il colore del bordo, spiegato nella legenda sopra l'elenco; se il pannello &egrave; largo compare anche una nota corta, e passando il mouse sulla riga leggi la spiegazione completa. Anche <b>fuori dal centro abitato</b> si inseriscono civici normali: li rende ricercabili il nome alternativo con la citt&agrave;. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
     <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito; <b>"gi&agrave; su Waze ma posizionato male"</b> &rarr; il numero c'&egrave; gi&agrave; su questa strada in un altro punto: trascina quello esistente sul punto giusto, non aggiungerne un altro. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
     <p class="wfit-key"><span class="wfit-gnum">7 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
     <div class="wfit-muted">Lo script modifica solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l'elenco modifiche prima di salvare</b>.</div>
@@ -1927,7 +1979,7 @@
         // dei nuovi dataset confronta con quella pubblicata
         let zipName = null;
         const buf = await gmFetchBinary(ANNCSU_DL + reg,
-            p => onProgress(p * 0.45, `Scarico indirizzario ${nome}\u2026 ${Math.round(p * 100)}%`),
+            p => onProgress(p * 0.45, `Download indirizzario ${nome}\u2026 ${Math.round(p * 100)}%`),
             undefined, h => { zipName = nomeZipDaHeaders(h); });
         onProgress(0.45, `Elaboro ${nome}\u2026`);
 
@@ -2020,13 +2072,13 @@
     async function downloadAllRegions() {
         if (busy) { if (batchRunning) stopBatch(ui.scaricaTutte); return; }
         const conferma = confirm(
-            'Scarico tutte e 20 le regioni, una dopo l\'altra.\n\n' +
+            'Verr\u00e0 effettuato il download di tutte e 20 le regioni, una dopo l\'altra.\n\n' +
             'Ci vogliono alcuni minuti e i dati occupano parecchio spazio fra cache locale e memoria ' +
             'del browser. Se ti servono poche zone, conviene scaricare le singole regioni.\n\n' +
             'Puoi fermarti quando vuoi con il tasto "Ferma".\n\nVuoi procedere?'
         );
         if (!conferma) return;
-        await downloadRegions(REGIONI.map(r => r[0]), 'Scarico tutte le regioni', ui.scaricaTutte);
+        await downloadRegions(REGIONI.map(r => r[0]), 'Download di tutte le regioni', ui.scaricaTutte);
     }
 
     async function refreshDownloadedRegions() {
@@ -2155,18 +2207,18 @@
         const topEsp = [...espTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
             .map(([v, n]) => `${v} (${n})`).join(', ');
         log(`esponenti: ${withEsp} civici su ${tot} (${(quota * 100).toFixed(1)}%) \u2014 mappatura ${mapSource}` +
-            (topEsp ? ` \u2014 piu' frequenti: ${topEsp}` : ' \u2014 nessuno'));
+            (topEsp ? ` \u2014 pi\u00f9 frequenti: ${topEsp}` : ' \u2014 nessuno'));
         if (specTally.size) {
             const topSpec = [...specTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)
                 .map(([v, n]) => `${v} (${n})`).join(', ');
             log(`numerazione rossa (Genova, Savona, Firenze): ${rossi} civici rossi \u2014 valori di SPECIFICITA: ${topSpec}`);
-            if (!rossi) log('ATTENZIONE: nessun civico rosso riconosciuto. Se fra i valori qui sopra ce n\'e\' uno che indica il rosso, segnalalo.');
+            if (!rossi) log('ATTENZIONE: nessun civico rosso riconosciuto. Se fra i valori qui sopra ce n\'\u00e8 uno che indica il rosso, segnalalo.');
         } else if (mapping && mapping.spec < 0 && NUM_ROSSA_REG.has(reg)) {
             log('ATTENZIONE: colonna SPECIFICITA non trovata nell\'intestazione: i civici rossi di Genova, Savona e Firenze non si possono distinguere.');
         }
         if (quota > 0.5) {
-            log(`ATTENZIONE: piu' di meta' dei civici risulta avere un esponente. E' molto probabile che ` +
-                `la colonna letta come ESPONENTE sia in realta' un'altra (progressivo o codice interno). ` +
+            log(`ATTENZIONE: pi\u00f9 di met\u00e0 dei civici risulta avere un esponente. \u00c8 molto probabile che ` +
+                `la colonna letta come ESPONENTE sia in realt\u00e0 un'altra (progressivo o codice interno). ` +
                 `Controlla i valori qui sopra: se sono numeri consecutivi e non lettere, segnala il problema.`);
         }
         return {
@@ -3126,9 +3178,9 @@
                     }
                     ricordaBarra();
                     const msg = fermo
-                        ? (usato ? `Risultati gia' a vista: riportato li' in ${now - start} ms, senza scorrere (${usato})` : 'Risultati gia\' a vista: posizione mantenuta')
-                        : giaQui ? `eri gia' su Fonti IT: portato ai Risultati${usato ? ' (' + usato + ')' : ''}`
-                            : `ok in ${now - start} ms${usato ? ' (' + usato + ')' : ' (era gia\' aperto)'}`;
+                        ? (usato ? `Risultati gi\u00e0 a vista: riportato l\u00ec in ${now - start} ms, senza scorrere (${usato})` : 'Risultati gi\u00e0 a vista: posizione mantenuta')
+                        : giaQui ? `eri gi\u00e0 su Fonti IT: portato ai Risultati${usato ? ' (' + usato + ')' : ''}`
+                            : `ok in ${now - start} ms${usato ? ' (' + usato + ')' : ' (era gi\u00e0 aperto)'}`;
                     if (revealEsito.indexOf('ok') !== 0 && usato) log('apertura automatica dei risultati:', msg);
                     revealEsito = msg;
                 }
@@ -3166,7 +3218,7 @@
                     + ` \u00b7 voce Script: ${navDesc(nav)}${navLearned ? ' (imparata)' : ''}`
                     + `${nav ? ' \u00b7 attiva: ' + isNavActive(nav) : ''} \u00b7 clic voce: ${navClicks} \u00b7 clic linguetta: ${tabClicks}`;
                 navCache = null;   // alla prossima cattura si cerca di nuovo
-                if (!nav) revealEsito += ' \u00b7 clicca UNA volta a mano la voce Script: lo script la impara e da li\' in poi la usa da solo';
+                if (!nav) revealEsito += ' \u00b7 clicca UNA volta a mano la voce Script: lo script la impara e da l\u00ec in poi la usa da solo';
                 log('apertura automatica dei risultati', revealEsito, '\u2014 se continua, scrivi wfitDiag() e mandami il risultato');
             }
         };
@@ -4258,7 +4310,7 @@
             const note = document.createElement('div');
             note.className = 'wfit-muted';
             note.style.marginBottom = '5px';
-            note.title = 'Stesso odonimo e stesso numero civico presenti piu\' volte nei dati ANNCSU (piu\' accessi allo stesso civico) o agganciati da piu\' segmenti. Sono mostrati tutti: nell\'elenco dei civici le ripetizioni sono marcate e arrivano senza spunta, decidi tu quale posizione e\' quella giusta.';
+            note.title = 'Stesso odonimo e stesso numero civico presenti pi\u00f9 volte nei dati ANNCSU (pi\u00f9 accessi allo stesso civico) o agganciati da pi\u00f9 segmenti. Sono mostrati tutti: nell\'elenco dei civici le ripetizioni sono marcate e arrivano senza spunta, decidi tu quale posizione \u00e8 quella giusta.';
             note.innerHTML = `&#8505;&#65039; ${lastDupCount} ${pl(lastDupCount, 'numero civico ripetuto', 'numeri civici ripetuti')} nell'archivio: ${pl(lastDupCount, 'mostrato', 'mostrati')} comunque, da valutare.`;
             ui.results.appendChild(note);
         }
@@ -4446,7 +4498,7 @@
             d.textContent = (mostraVieVicine ? 'Vie vicine non in lista: ' : 'Ignorati i civici di vie vicine non in lista: ') + elenco + ' ';
             d.title = 'Sono i civici di strade accanto a quella che hai catturato (traverse, incroci): cadono nel raggio, '
                 + 'ma su Waze appartengono a un\'altra via che non hai in lista. Per questo non hanno una scheda e non sono disegnati sulla mappa. '
-                + 'Se vuoi lavorare anche quella via, catturane i segmenti.';
+                + 'Se vuoi lavorare anche su quella via, catturane i segmenti.';
             const a = document.createElement('a');
             a.href = 'javascript:void(0)';
             a.textContent = mostraVieVicine ? 'nascondi' : 'mostra';
@@ -4537,13 +4589,13 @@
             return 'il segmento pi\u00f9 vicino non \u00e8 di questa via: civico non inserito per non agganciarlo alla via sbagliata';
         }
         if (m.indexOf('WFIT segmento della via non caricato') >= 0) {
-            return 'segmento della via non caricato nell\'editor, civico non inserito per non agganciarlo a un\'altra via: avvicinati alla strada (o riduci lo zoom finch\u00e9 la vedi tutta) e ripremi il bottone';
+            return 'segmento della via non caricato nell\'editor, civico non inserito per non agganciarlo a un\'altra via: avvicinati alla strada (o riduci lo zoom finch\u00e9 la vedi tutta) e premi di nuovo il pulsante';
         }
         if (/projected segment|not allowed to add a house number|point is a required/i.test(m)) {
-            return 'segmento con modifiche non salvate: salva (Ctrl+S) e ripremi il bottone';
+            return 'segmento con modifiche non salvate: salva (Ctrl+S) e premi di nuovo il pulsante';
         }
         if (/not found in data model/i.test(m)) {
-            return 'segmento non pi\u00f9 caricato nell\'editor: torna sulla strada (o riduci lo zoom finch\u00e9 la vedi tutta) e ripremi il bottone';
+            return 'segmento non pi\u00f9 caricato nell\'editor: torna sulla strada (o riduci lo zoom finch\u00e9 la vedi tutta) e premi di nuovo il pulsante';
         }
         if (/exists|duplicate/i.test(m)) return 'civico gi\u00e0 presente';
         if (/permission|rank|lock/i.test(m)) return 'permessi insufficienti sul segmento';
@@ -4964,7 +5016,7 @@
         const civiciLetti = out.filter(h => h.own).length;
         if (attesi > 0 && civiciLetti === 0) {
             ok = false;
-            log(`civici esistenti: ${attesi} ${pl(attesi, 'segmento ha', 'segmenti hanno')} civici secondo il WME, ma non se n'e' letto nessuno`);
+            log(`civici esistenti: ${attesi} ${pl(attesi, 'segmento ha', 'segmenti hanno')} civici secondo il WME, ma non se n'\u00e8 letto nessuno`);
         }
         // ultima rete: quello che ha inserito lo script in questa sessione
         // (legati al NOME della via su cui sono stati inseriti, non a tutta la lista di allora)
@@ -4974,7 +5026,7 @@
             if (stessaVia) out.push({ num: h.num, c: h.c, own: true, sid: h.segId, memoria: true });
         }
         lastHNScan = { hn: 0, segs: nums.length, rpp: 0, ok, come, scaricati, attesi, esclusi: via.esclusi };
-        log(`civici gia' su Waze: ${out.length} utili su ${letti} letti, ${nums.length}/${viaIds.length} segmenti caricati della stessa via ` +
+        log(`civici gi\u00e0 su Waze: ${out.length} utili su ${letti} letti, ${nums.length}/${viaIds.length} segmenti caricati della stessa via ` +
             `(${captured.size} in lista)${ok ? ' \u00b7 sorgente: ' + come : ' \u00b7 LETTURA NON RIUSCITA'}`);
         // Luoghi residenziali (RPP) della stessa via: per la guida un indirizzo gia' fatto come RPP
         // non va inserito anche come civico normale
@@ -5384,9 +5436,9 @@
                 + 'ma spesso \u00e8 un dato d\'archivio da controllare: per questo arriva senza spunta. Guarda il posto su Street View: '
                 + 'se \u00e8 giusto spuntalo, se il numero vero \u00e8 un altro correggilo nella casella e spuntalo.'
             : p.ovl
-            ? `Questo civico sta sulla stessa coordinata di altri ${p.ovlN - 1} (${HN_OVERLAP_TXT}): sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono. Per questo il gruppo arriva senza spunta e la scelta la fai tu: guarda il posto su Street View e spunta quelli che esistono davvero \u2014 anche piu\' di uno, se sul posto ci sono davvero piu\' ingressi. Quelli che inserisci nascono tutti in questo punto: poi vanno TRASCINATI uno per uno sull\'ingresso giusto, prima di salvare. Clic sulla riga per centrare la mappa.`
+            ? `Questo civico sta sulla stessa coordinata di altri ${p.ovlN - 1} (${HN_OVERLAP_TXT}): sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono. Per questo il gruppo arriva senza spunta e la scelta la fai tu: guarda il posto su Street View e spunta quelli che esistono davvero \u2014 anche pi\u00f9 di uno, se sul posto ci sono davvero pi\u00f9 ingressi. Quelli che inserisci nascono tutti in questo punto: poi vanno TRASCINATI uno per uno sull\'ingresso giusto, prima di salvare. Clic sulla riga per centrare la mappa.`
             : p.dup
-            ? 'Questo numero compare su piu\' record ANNCSU distinti (stesso comune, stesso odonimo, stessa localita\'): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
+            ? 'Questo numero compare su pi\u00f9 record ANNCSU distinti (stesso comune, stesso odonimo, stessa localit\u00e0): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
             : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).';
         return base + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
     }
@@ -5723,7 +5775,7 @@
         for (const x of sel) bump(cnt, x.label);
         const rip = Object.entries(cnt).filter(([, n]) => n > 1).map(([v]) => v);
         if (rip.length) {
-            toast(`Hai selezionato lo stesso numero in piu' punti (${rip.slice(0, 6).join(', ')}${rip.length > 6 ? '\u2026' : ''}): Waze ne accetta uno solo per via, gli altri verranno rifiutati al salvataggio. Se sai qual e' quello giusto, togli la spunta agli altri.`, 11000);
+            toast(`Hai selezionato lo stesso numero in pi\u00f9 punti (${rip.slice(0, 6).join(', ')}${rip.length > 6 ? '\u2026' : ''}): Waze ne accetta uno solo per via, gli altri verranno rifiutati al salvataggio. Se sai qual \u00e8 quello giusto, togli la spunta agli altri.`, 11000);
         }
         return sel;
     }
@@ -5850,7 +5902,7 @@
                 ctx.scan.textContent = !lastHNScan.ok
                     ? '\u26a0\ufe0f Su questa via ci sono gi\u00e0 dei civici, ma il tuo editor non me li fa leggere: non posso dirti quali numeri esistono di gi\u00e0. '
                         + (zoomOra() != null && zoomOra() < 18
-                            ? `Sei allo zoom ${zoomOra()}: avvicinati sul tratto che stai lavorando (l'editor carica i civici di solito dal 16-18 in su) e riapri l'elenco. `
+                            ? `Sei allo zoom ${zoomOra()}: avvicinati sul tratto che stai lavorando (di solito l'editor carica i civici dallo zoom 16-18 in su) e riapri l'elenco. `
                             : 'Prova a ricaricare l\'editor e a riaprire l\'elenco. ')
                         + 'Se vai avanti cos\u00ec, guarda tu sulla mappa quali civici ci sono gi\u00e0: i doppioni verrebbero rifiutati al salvataggio.'
                     : rppTxt + (lastHNScan.hn
@@ -5860,9 +5912,9 @@
                                 : '.')
                         : `Nessun civico gi\u00e0 su Waze sui ${segTxt}.`);
                 ctx.scan.title = (lastHNScan.ok ? '' : 'Il WME carica i numeri civici solo dallo zoom 18 in su e solo per la zona a schermo: '
-                        + 'piu' + '\u00f9 lontano lo script non pu\u00f2 sapere quali esistono gi\u00e0.\n\n')
+                        + 'pi\u00f9 lontano lo script non pu\u00f2 sapere quali esistono gi\u00e0.\n\n')
                     + 'Il controllo dei doppioni guarda TUTTI i segmenti della stessa via caricati nell\'editor, non solo quelli che hai in lista: '
-                    + 'cosi\' trova il civico anche se sta cento metri piu\' avanti. Quello che l\'editor non ha ancora caricato per\u00f2 non si vede: '
+                    + 'cos\u00ec trova il civico anche se sta cento metri pi\u00f9 avanti. Quello che l\'editor non ha ancora caricato per\u00f2 non si vede: '
                     + 'se la via \u00e8 lunga, prima di aprire l\'elenco allarga la vista sulla strada intera.';
                 ctx.scan.style.display = '';
             }
@@ -5921,7 +5973,7 @@
             if (marked || rpp) ctx.addLegend('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
             if (moved) {
                 ctx.addLegend('<span class="wfit-swatch wfit-sw-moved"></span> gi\u00e0 su Waze, posizionato male');
-                log(`civici gia' presenti sulla via ma lontani dal punto ANNCSU: ${moved} (non inseriti)`);
+                log(`civici gi\u00e0 presenti sulla via ma lontani dal punto ANNCSU: ${moved} (non inseriti)`);
             }
             try { annotateNumbering(ctx); } catch (e) { log('controllo lato/sequenza KO', e); }
             ctx.updateGo();
@@ -5979,7 +6031,7 @@
             const nPunti = shown.filter(p => p.ovl).length;
             toast(`${nPunti} civici stanno sulla stessa coordinata di ${pl(nOverlap, 'un altro', 'altri')} (${nOverlap} ${pl(nOverlap, 'gruppo', 'gruppi')}, ${HN_OVERLAP_TXT}): `
                 + 'sulla mappa i numeri si stampano uno sopra l\'altro e non si leggono, quindi li ho lasciati tutti senza spunta. '
-                + 'Controlla su Street View e spunta quelli che esistono davvero, anche piu\' di uno: '
+                + 'Controlla su Street View e spunta quelli che esistono davvero, anche pi\u00f9 di uno: '
                 + 'nascono in questo punto e poi li trascini sugli ingressi giusti prima di salvare. '
                 + 'I civici semplicemente vicini fra loro non sono toccati.', 14000);
         }
@@ -6032,11 +6084,11 @@
         const giaKeys = nr => giaSullaVia[nr ? 1 : 0] ||
             (giaSullaVia[nr ? 1 : 0] = new Set(existing.filter(h => h.own).map(h => hnKey(h.num, nr))));
         const one = p => {
-            if (findExistingHN(existing, p.label, p.lon, p.lat, p.nr)) { tally.dup++; rec(p, 'gia_presente', 'civico gia\' su Waze'); return; }
+            if (findExistingHN(existing, p.label, p.lon, p.lat, p.nr)) { tally.dup++; rec(p, 'gia_presente', 'civico gi\u00e0 su Waze'); return; }
             const far = findMisplacedHN(existing, p.label, p.lon, p.lat, p.nr);
             if (far) {
                 tally.moved++;
-                rec(p, 'non_inserito', `civico gia' su questa strada a ~${Math.round(far.d)} m: va spostato, non aggiunto`);
+                rec(p, 'non_inserito', `civico gi\u00e0 su questa strada a ~${Math.round(far.d)} m: va spostato, non aggiunto`);
                 return;
             }
             // stesso numero sulla via letto da una sorgente senza coordinate utili (o come RPP)
@@ -6135,8 +6187,8 @@
             cnt.other++;
         }
         if (cnt.lock) bump(reasons, 'non hai i permessi su questa strada (bloccata sopra il tuo livello): chiedi lo sblocco alla community', cnt.lock);
-        if (cnt.unnamed) bump(reasons, 'la strada pi\u00f9 vicina al punto \u00e8 senza nome: dalle prima un nome (catturala con lo script), poi riprova', cnt.unnamed);
-        if (cnt.other) bump(reasons, 'rifiutato dal WME: zooma di pi\u00f9 sulla zona o ricarica la pagina e riprova (oppure inseriscilo a mano)', cnt.other);
+        if (cnt.unnamed) bump(reasons, 'la strada pi\u00f9 vicina al punto \u00e8 senza nome: assegnale prima un nome (catturala con lo script), poi riprova', cnt.unnamed);
+        if (cnt.other) bump(reasons, 'rifiutato dal WME: aumenta lo zoom sulla zona o ricarica la pagina e riprova (oppure inseriscilo a mano)', cnt.other);
     }
 
     function hnInsertSummary(tally, nome) {
@@ -6372,7 +6424,7 @@
             // regole della guida: le rampe restano senza citta' con i nomi di direzione, e i
             // segmenti non carrabili (sentieri, ferrovie...) non si editano
             if (seg.roadType === RT_RAMP) return 'rampa: per la guida resta senza citt\u00e0 e con i nomi di direzione, non si nomina con ANNCSU';
-            if (seg.isDrivable === false) return 'segmento non carrabile (sentiero, ferrovia...): per la guida non va editato';
+            if (seg.isDrivable === false) return 'segmento non carrabile (sentiero, ferrovia...): per la guida non va modificato';
 
             const st = segAddressState(id);
             const known = Array.isArray(st.alts);
@@ -6439,7 +6491,7 @@
 
     // Segmenti fuori dall'area caricata: ci si sposta sopra uno per uno e si riprova
     async function retryOffscreenSegments(notLoaded, tryApply, noteFail, recSeg, esitoDi, tally) {
-        const fuoriArea = 'fuori dall\'area caricata: torna sulla zona e ripremi Applica';
+        const fuoriArea = 'fuori dall\'area caricata: torna sulla zona e premi di nuovo Applica';
         if (!canPan()) {
             for (const it of notLoaded) {
                 noteFail(it.id, fuoriArea, false);
