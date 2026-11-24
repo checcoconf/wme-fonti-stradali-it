@@ -28,6 +28,10 @@ Per il Friuli-Venezia Giulia lo script usa anche la numerazione civica georiferi
 Autonoma Friuli Venezia Giulia ("Numeri Civici Ascot 2024" e "Numeri Civici Non ASCOT 2024",
 https://www.dati.friuliveneziagiulia.it/), open data con Italian Open Data License 2.0:
 https://www.dati.gov.it/content/italian-open-data-license-v20
+Per l'Alto Adige lo script usa anche l'indirizzario dei comuni ("Adressen - Numeri civici") del
+Consorzio dei Comuni della Provincia di Bolzano, pubblicato sul geoportale della Provincia
+autonoma di Bolzano (https://geoservices3.civis.bz.it/), open data con licenza CC0 1.0:
+https://creativecommons.org/publicdomain/zero/1.0/deed.it
 L'elenco dei comuni proviene da Istat (Elenco comuni italiani).
 Questi dati restano dei rispettivi titolari e vanno citati quando li riutilizzi.
 

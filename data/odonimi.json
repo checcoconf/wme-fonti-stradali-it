@@ -1,7 +1,7 @@
 {
 "formato": 1,
 "descrizione": "Regole di normalizzazione degli odonimi italiani usate da WME Fonti Stradali IT. E' un file di dati, non di codice: si corregge senza toccare lo script. Tutte le voci vanno scritte in minuscolo e senza accenti sulle maiuscole.",
-"aggiornato": "2026-09-11",
+"aggiornato": "2026-11-24",
 
 "_note_abbreviazioni": "Parola per esteso -> forma abbreviata Waze. Applicata sempre, anche con il Title Case disattivato. Le forme devono essere quelle della tabella 'Abbreviazioni del TTS' della Wazeopedia Italia (dir, var, racc, circ, Cav.), scritte esattamente cosi' e senza punto: 'Dir.' il TTS lo legge 'direzione'. Se preferisci il nome per esteso (la guida Denominazione vuole i nomi ufficiali), togli la voce.",
 "abbreviazioni": {
@@ -33,10 +33,9 @@
 "_note_particelle": "Particelle che possono far parte di un cognome e quindi andare maiuscole.",
 "particelleCognome": ["di","de","del","dello","della","dei","degli","delle","da","dal","dalla","dalle","la","lo","li"],
 
-"_note_cognomi": "Cognomi con particella che vanno sempre maiuscoli (particella + parola successiva).",
+"_note_cognomi": "Cognomi con particella che vanno sempre maiuscoli (particella + parola successiva). I cognomi con \"del\", \"della\", \"dalla\" non ci sono: restano minuscoli (Via Oreste del Prete, Via della Chiesa).",
 "cognomiConParticella": [
   "de amicis","de andre","de bono","de bosis","de chirico","de curtis","de filippo","de gasperi","de giorgi","de gregori","de luca","de marchi","de martino","de nicola","de nittis","de pinedo","de roberto","de rossi","de sanctis","de santis","de sica","de vito","de zerbi",
-  "del monaco","del prete","del vecchio","della chiesa","della porta","della valle","dalla chiesa","dalla costa",
   "di bartolo","di brazza","di cagno","di crollalanza","di giacomo","di giorgio","di giovanni","di giura","di lorenzo","di marzio","di michele","di nardo","di paolo","di pietro","di vagno","di vittorio",
   "la farina","la malfa","la marmora","la masa","la pira","li causi","lo bianco","lo faro","lo presti","lo re"
 ],

@@ -150,27 +150,37 @@ colonna sbagliata (un progressivo, un codice interno) e il pannello ti avvisa in
 avviso se la cache proviene da una versione precedente dello script, nel qual caso gli esponenti
 possono mancare: basta ripremere *Scarica regione* per rigenerarla.
 
-### Friuli-Venezia Giulia: i civici della Regione
+### Fonti locali: Friuli-Venezia Giulia e Provincia di Bolzano
 
-In Friuli-Venezia Giulia ANNCSU ha le coordinate solo per circa **4 civici su 10** (in 131 comuni su
-215 per nessuno). Per questa regione, dopo il download ANNCSU, lo script scarica anche la numerazione
-civica georiferita della Regione dal portale [dati.friuliveneziagiulia.it](https://www.dati.friuliveneziagiulia.it/)
-(dataset *Numeri Civici Ascot* e *Numeri Civici Non ASCOT*) e la incrocia con ANNCSU civico per civico:
+In alcune zone ANNCSU ha molti civici senza coordinate, mentre l'ente locale pubblica come open data
+la propria numerazione civica georiferita. Per queste zone, dopo il download ANNCSU della regione, lo
+script legge anche la fonte locale e la incrocia con ANNCSU civico per civico:
+
+| Regione da scaricare | Fonte locale | Cosa cambia |
+|---|---|---|
+| **Friuli-Venezia Giulia** | numerazione civica della Regione, da [dati.friuliveneziagiulia.it](https://www.dati.friuliveneziagiulia.it/) (dataset *Numeri Civici Ascot* e *Numeri Civici Non ASCOT*) | ANNCSU ha le coordinate solo per circa 4 civici su 10 (in 131 comuni su 215 per nessuno): i civici utilizzabili passano da circa **230.000 a oltre 460.000** |
+| **Trentino-Alto Adige** | indirizzario dei comuni della **Provincia autonoma di Bolzano**, dal [geoportale della Provincia](https://geoservices3.civis.bz.it/) (aggiornato ogni giorno) | in 16 comuni altoatesini su 116 ANNCSU non ha coordinate: i civici utilizzabili in Alto Adige passano da circa **126.000 a 144.000**. La provincia di Trento resta com'è |
 
 | Caso | Cosa succede |
 |---|---|
 | civico già in ANNCSU con coordinate | resta quello di ANNCSU |
-| civico in ANNCSU senza coordinate | prende le coordinate regionali e tiene l'odonimo di ANNCSU |
+| civico in ANNCSU senza coordinate | prende le coordinate della fonte locale e tiene l'odonimo di ANNCSU |
 | civico assente da ANNCSU, su una via che ANNCSU ha in quel comune | si aggiunge, con l'odonimo di ANNCSU |
 | via che ANNCSU non ha, nome ambiguo | si scarta: meglio un civico in meno che un odonimo non confermato |
 
 Il confronto riconosce le grafie diverse della stessa via (*Via G. Verdi* e *Via Giuseppe Verdi*,
-*Via I Maggio* e *Via Primo Maggio*, *Fraz. Prato* e *Frazione Prato*). Risultato: i civici
-utilizzabili in FVG passano da circa **230.000 a oltre 460.000**. Il download della regione dura
-qualche decina di secondi in più. Se il portale regionale non risponde, il FVG resta con i soli
-civici ANNCSU e il pulsante *Aggiorna* si accende per riprovare.
+*Via I Maggio* e *Via Primo Maggio*, *Fraz. Prato* e *Frazione Prato*). Il download della regione
+dura qualche decina di secondi in più. Se la fonte locale non risponde, lì restano i soli civici
+ANNCSU e il pulsante *Aggiorna* si accende per riprovare.
 
-L'integrazione l'ha suggerita **Luca74ts**: grazie!
+**Se avevi già la regione in locale** quando la fonte è entrata nello script, i suoi civici non ci
+sono ancora: il pulsante *Aggiorna* si accende di verde e nella campanella arriva una notifica con
+il bottone **Aggiorna**, che effettua di nuovo il download delle sole regioni da completare.
+
+Una fonte entra nello script solo se ha le **coordinate geografiche** dei civici ed è tenuta
+**aggiornata**. Ogni fonte copre il proprio territorio e l'incrocio è uno solo per regione: lo
+stesso civico entra una volta sola. L'integrazione del Friuli-Venezia Giulia l'ha suggerita
+**Luca74ts**: grazie! Se conosci altre banche dati aperte di civici, segnalale all'autore.
 
 **Elenco comuni.** I codici Belfiore vengono tradotti in nomi di comune con l'elenco ISTAT di
 `data/comuni.json`, che Tampermonkey scarica insieme allo script: funziona anche offline.
@@ -222,11 +232,13 @@ I segmenti catturati compaiono come **chip** sotto il menu:
 |---|---|
 | **Evidenzia** | colore del tratteggio con cui i segmenti in lista vengono marcati sulla mappa (ciano, fucsia, giallo, lime, arancione) |
 | **Raggio (m)** | distanza massima civico–segmento per il confronto → [Il Raggio](#6--il-raggio) |
-| **Formato Waze** | scrive il nome con maiuscole e minuscole all'italiana (`VIA MARGHERITA DI SAVOIA` → `Via Margherita di Savoia`). Spegnendola resta il maiuscolo di ANNCSU, ma le altre correzioni (sigle, date, abbreviazioni) valgono comunque |
-| **Auto-analisi** | il confronto riparte da solo a ogni modifica della lista |
-| **Civici sulla mappa** | disegna i punti ANNCSU etichettati col numero (343, 343/A…), colorati per odonimo |
-| **Pallini** | dimensione dei punti e dei numeri disegnati sulla mappa: *Piccoli*, *Normali* (predefinito), *Grandi*, *Molto grandi*, *Enormi*. Comodo su schermi grandi o quando i civici sono fitti; non cambia nulla di ciò che finisce su Waze. Compare solo con *Civici sulla mappa* attivo |
+| **Pallini** | dimensione dei punti e dei numeri disegnati sulla mappa: *Piccoli*, *Normali* (predefinito), *Grandi*, *Molto grandi*, *Enormi*. Comodo su schermi grandi o quando i civici sono fitti; non cambia nulla di ciò che finisce su Waze |
 | **Applica come** | regola di scrittura dell'indirizzo → [Applica](#8--applica-i-nomi-ai-segmenti) |
+
+Sono sempre attivi, senza bisogno di spunte: il **formato Waze** dei nomi (maiuscole e minuscole
+all'italiana: `VIA MARGHERITA DI SAVOIA` → `Via Margherita di Savoia`), il **confronto automatico**
+a ogni modifica della lista, l'**apertura dei Risultati** dopo la cattura e i **civici sulla mappa**
+(i punti ANNCSU etichettati col numero, colorati per odonimo).
 
 ---
 
@@ -294,8 +306,8 @@ appartiene a quale strada. Applicare o inserire in queste condizioni significa s
 
 ## 7 · Confronta con ANNCSU
 
-Con **Auto-analisi** attiva il confronto parte da solo a ogni cattura; altrimenti premi
-**🔍 Confronta con ANNCSU**.
+Il confronto parte da solo a ogni cattura; **🔍 Confronta con ANNCSU** serve a ripeterlo, per
+esempio dopo aver cambiato il raggio.
 
 Per ogni odonimo trovato compare una scheda con:
 
@@ -758,9 +770,8 @@ file nuovo), una volta sola per ogni editor.
 | `titolo` | sì | Titolo nella campanella (massimo 120 caratteri) |
 | `testo` | sì | Testo semplice, senza HTML (massimo 1500 caratteri). `\n\n` separa i paragrafi |
 | `regioni` | no | L'avviso arriva solo a chi ha in locale almeno una di queste regioni. Si scrivono per nome, come nel menu dello script. Senza questo campo arriva a tutti |
-| `download_prima_della_versione` | no | Per dire "effettua di nuovo il download": l'avviso arriva solo a chi ha quelle regioni scaricate con una versione dello script più vecchia di questa (es. `"1.1.0"`), e ha il bottone **Aggiorna** che effettua di nuovo il download. Senza `regioni` vale per tutte le regioni in locale |
 | `dal` / `scade` | no | Date `AAAA-MM-GG`: prima di `dal` e dopo `scade` l'avviso non viene mostrato |
-| `link` | no | Bottone che apre una pagina (`url` deve iniziare con `https://`). Non si usa insieme a `download_prima_della_versione`, che ha già il suo bottone |
+| `link` | no | Bottone che apre una pagina (`url` deve iniziare con `https://`) |
 
 Note pratiche:
 
@@ -772,6 +783,10 @@ Note pratiche:
 - A ogni modifica una Action controlla che il file sia scritto bene: se c'è un errore GitHub ti
   avvisa per email e indica l'avviso da correggere. Finché non lo correggi gli editor non ricevono nulla.
 - Gli avvisi arrivano solo a chi ha lo script dalla versione 1.1.0 in poi.
+- Per dire "effettua di nuovo il download" quando entra una nuova fonte locale non serve un avviso:
+  dalla 1.1.1 lo script se ne accorge da solo e mette la sua notifica nella campanella. Il campo
+  `download_prima_della_versione` serviva a questo nella 1.1.0: le versioni successive saltano gli
+  avvisi che lo contengono.
 
 ---
 
@@ -790,7 +805,10 @@ Dati: [ANNCSU](https://www.anncsu.gov.it/it/) (Istat / Agenzia delle Entrate), o
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.it). Per il Friuli-Venezia Giulia anche la
 numerazione civica della Regione Autonoma Friuli Venezia Giulia
 ([dati.friuliveneziagiulia.it](https://www.dati.friuliveneziagiulia.it/)), con licenza
-[IODL 2.0](https://www.dati.gov.it/content/italian-open-data-license-v20).
+[IODL 2.0](https://www.dati.gov.it/content/italian-open-data-license-v20). Per l'Alto Adige anche
+l'indirizzario del Consorzio dei Comuni della Provincia di Bolzano, pubblicato sul geoportale della
+Provincia autonoma di Bolzano con licenza
+[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/deed.it).
 
 Waze e Waze Map Editor sono marchi di Waze Mobile / Google. Progetto indipendente, non affiliato.
 

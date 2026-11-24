@@ -1,5 +1,12 @@
 [
   {
+    "version": "1.1.1",
+    "date": "2026-11-24",
+    "changes": {
+      "it": "<ul><li><b>Provincia autonoma di Bolzano: civici in pi&ugrave;.</b> In 16 comuni altoatesini su 116 ANNCSU non ha le coordinate dei civici. Ora, con il download del Trentino-Alto Adige, lo script legge anche l'indirizzario dei comuni dell'Alto Adige pubblicato sul geoportale della Provincia (aggiornato ogni giorno) e lo incrocia con ANNCSU, come gi&agrave; fa per il Friuli-Venezia Giulia: i civici utilizzabili in Alto Adige passano da circa 126.000 a 144.000.</li><li>Se hai gi&agrave; il Trentino-Alto Adige in locale, effettua di nuovo il download: il pulsante <b>Aggiorna</b> si accende di verde e nella campanella arriva una notifica con il bottone <b>Aggiorna</b>. Da questa versione lo script avvisa da solo ogni volta che per una regione che hai gi&agrave; in locale entra una nuova fonte di civici.</li><li><b>Pannello pi&ugrave; semplice</b>: tolte le spunte <i>Formato Waze</i>, <i>Auto-analisi</i>, <i>Apri i risultati</i> e <i>Civici sulla mappa</i>. Le quattro funzioni sono sempre attive.</li><li>Nei nomi come <i>Via Oreste del Prete</i> e <i>Via della Chiesa</i>, &laquo;del&raquo;, &laquo;della&raquo; e &laquo;dalla&raquo; restano minuscoli.</li></ul>"
+    }
+  },
+  {
     "version": "1.1.0",
     "date": "2026-11-24",
     "changes": {

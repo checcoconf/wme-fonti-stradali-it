@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      1.1.0
+// @version      1.1.1
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       Francesco Conforti (checcoconf)
 // @copyright    2026 Francesco Conforti
@@ -27,6 +27,7 @@
 // @resource     odonimi      https://raw.githubusercontent.com/checcoconf/wme-fonti-stradali-it/main/data/odonimi.json
 // @connect      anncsu.open.agenziaentrate.gov.it
 // @connect      www.dati.friuliveneziagiulia.it
+// @connect      geoservices3.civis.bz.it
 // @connect      www.istat.it
 // @connect      istat.it
 // @connect      raw.githubusercontent.com
@@ -182,7 +183,7 @@
     // restituirli, e senza questa memoria tornerebbero nell'elenco come se mancassero.
     let civiciInseriti = [];
     let lastPtsByG = new Map();       // gid -> [{lon,lat,label,d}] civici agganciati (deduplicati)
-    let lastDotFeatures = [];         // ultime feature disegnate (per riaccendere la spunta al volo)
+    let lastDotFeatures = [];         // ultimi civici disegnati sulla mappa
     const dotIndex = new Map();       // id della feature -> { g, p }: serve al clic sul pallino
     let lastDupCount = 0;             // doppioni civici scartati nell'ultimo confronto
     let analyzeTimer = null;
@@ -228,9 +229,8 @@
     const RAGGIO_MAX = 50;   // oltre i 45 m Waze rifiuta i civici: un raggio piu' largo non serve
 
     const DEFAULT_SETTINGS = {
-        raggio: 10, titleCase: true, captureMode: 'alt', applyMode: 'extra',
-        autoAnalyze: true, showDots: true, dotSize: 'normale', hlColor: '#00e5ff', captureKey: null,
-        apriRisultati: true
+        raggio: 10, captureMode: 'alt', applyMode: 'extra',
+        dotSize: 'normale', hlColor: '#00e5ff', captureKey: null
     };
 
     // Riporta al formato attuale le impostazioni salvate dalle versioni precedenti e
@@ -260,9 +260,9 @@
         s.raggio = Math.min(RAGGIO_MAX, Math.max(1, parseInt(s.raggio, 10) || DEFAULT_SETTINGS.raggio));
         // 0.3.6: tolto "Traccia le vie dell'agro", con la sua impostazione
         delete s.zonaSoloMie;
-        // Dalla 0.3.2: dopo la cattura col tasto il pannello si apre da solo sui Risultati.
-        // Acceso per tutti, anche per chi aggiorna; si spegne dalla spunta "Apri i risultati".
-        s.apriRisultati = s.apriRisultati !== false;
+        // 1.1.1: Formato Waze, Auto-analisi, Apri i risultati e Civici sulla mappa sono sempre
+        // attivi: tolte le quattro spunte, con le loro impostazioni
+        delete s.titleCase; delete s.autoAnalyze; delete s.apriRisultati; delete s.showDots;
         // Dimensione dei pallini sulla mappa: se il valore salvato non esiste piu', si torna a 'normale'
         if (!DOT_SIZES[s.dotSize]) s.dotSize = 'normale';
         return s;
@@ -1058,8 +1058,8 @@
             catch (e) { log('azione della notifica di aggiornamento non registrata:', e.message); }
             try { if (c) c.notification.onAction('riscarica-dataset', () => riscaricaDaNotifica().catch(e => log('riscarico da notifica KO', e))); }
             catch (e) { log('azione della notifica dati non registrata:', e.message); }
-            try { if (c) c.notification.onAction('aggiorna-da-avviso', () => aggiornaDaAvviso().catch(e => log('download da avviso KO', e))); }
-            catch (e) { log('azione degli avvisi non registrata:', e.message); }
+            try { if (c) c.notification.onAction('riscarica-fonti', () => riscaricaPerFonti().catch(e => log('download per le fonti locali KO', e))); }
+            catch (e) { log('azione della notifica delle fonti locali non registrata:', e.message); }
         });
         const controlli = () => {
             controllaNuovaVersione().catch(e => log('controllo aggiornamenti KO', e));
@@ -1335,13 +1335,48 @@
         await downloadRegions(list, 'Download dei nuovi dati ANNCSU', ui.aggiorna);
     }
 
+    // Notifica "fonti locali": compare, una volta sola, quando una regione in locale non ha ancora
+    // i civici di una fonte che la riguarda (regione scaricata prima che la fonte entrasse nello
+    // script, o fonte non raggiungibile all'ultimo download). Dopo il nuovo download se ne va.
+    async function aggiornaAvvisoFonti(regs) {
+        const client = await avvisi;
+        if (!client) return;
+        try {
+            const fonti = [...new Set((regs || []).flatMap(fontiMancanti))];
+            if (!fonti.length) {
+                if (client.notification.list().some(n => n.id === 'fonti')) client.notification.remove('fonti');
+                return;
+            }
+            const visto = 'fonti-' + fonti.map(f => f.id).sort().join(',');
+            const visti = avvisiVisti();
+            if (visti.includes(visto)) return;
+            visti.push(visto);
+            try { GM_setValue(AVVISI_VISTI, JSON.stringify(visti)); } catch { /* al massimo si ripete */ }
+            const regioni = [...new Set(fonti.map(f => regNome(f.reg)))].join(', ');
+            client.notification.add({
+                id: 'fonti',
+                title: `${regioni}: altri civici disponibili`,
+                message: `Oltre ad ANNCSU lo script integra i civici georiferiti ${fonti.map(f => f.ente).join(' e ')}: danno le coordinate a molti civici che in ANNCSU ne sono privi.\n\nNei dati che hai in locale (${regioni}) non ci sono ancora: premi Aggiorna per effettuare di nuovo il download.`,
+                buttonText: 'Aggiorna',
+                action: 'riscarica-fonti'
+            });
+        } catch (e) { log('avviso fonti locali non aggiornato:', e.message); }
+    }
+    async function riscaricaPerFonti() {
+        const avvisa = await prontoPerDownloadDaNotifica();
+        if (!avvisa) return;
+        const regs = await idb.all('regioni');
+        const list = [...new Set(regs.flatMap(fontiMancanti).map(f => f.reg))];
+        if (!list.length) { avvisa(`${SCRIPT_NAME}: i dati che hai in locale sono gi\u00e0 completi.`); aggiornaAvvisoFonti(regs); return; }
+        await downloadRegions(list, 'Download dei dati aggiornati', ui.aggiorna);
+    }
+
     // Avvisi dell'autore agli editor, senza pubblicare una versione: stanno in avvisi.json sul ramo
     // main del repo. Ogni voce ha id, titolo e testo. Sono facoltativi:
     //  - "regioni": arriva solo a chi ha in locale almeno una di quelle regioni (nome o codice);
-    //  - "download_prima_della_versione": arriva solo a chi ha una di quelle regioni scaricata con
-    //    una versione dello script piu' vecchia di questa, e ha il bottone Aggiorna che ne effettua
-    //    di nuovo il download (senza "regioni" vale per tutte le regioni in locale);
     //  - "dal" e "scade" (date AAAA-MM-GG) e "link" ({ testo, url }, solo https).
+    // Le voci con "download_prima_della_versione" sono per la sola 1.1.0, che non aveva la notifica
+    // delle fonti locali qui sopra: da questa versione si saltano.
     // Ogni avviso compare una volta sola: l'elenco di quelli gia' mostrati sta nello spazio di
     // Tampermonkey, condiviso fra WME e WME beta.
     const AVVISI_VISTI = 'wmeFontiIT_avvisi_visti';
@@ -1356,10 +1391,6 @@
         const volute = new Set(a.regioni.map(soloLettere));
         return regs.filter(r => volute.has(soloLettere(r.reg)) || volute.has(soloLettere(regNome(r.reg))));
     }
-    // Fra quelle, le copie fatte con una versione dello script piu' vecchia di quella indicata
-    // (le copie di prima della 1.1.0 non hanno la versione annotata: sono piu' vecchie di tutte)
-    const regioniDaAggiornare = (a, regs) => !a.download_prima_della_versione ? []
-        : regioniAvviso(a, regs).filter(r => !r.ver || versioneMaggiore(a.download_prima_della_versione, r.ver)).map(r => r.reg);
 
     async function mostraAvvisiAutore() {
         const client = await avvisi;
@@ -1375,36 +1406,18 @@
         let mostrati = 0;
         for (const a of voci) {
             if (mostrati >= AVVISI_PER_VOLTA) break;
-            if (!a || !a.id || !a.titolo || !a.testo) continue;
+            if (!a || !a.id || !a.titolo || !a.testo || a.download_prima_della_versione) continue;
             const id = 'avviso-' + a.id;
             if (visti.includes(id)) continue;
             if ((a.dal && oggi < a.dal) || (a.scade && oggi > a.scade)) continue;
-            const aggiorna = !!a.download_prima_della_versione;
-            const perRegioni = Array.isArray(a.regioni) && a.regioni.length > 0;
-            const destinatario = aggiorna ? regioniDaAggiornare(a, regs).length > 0 : !perRegioni || regioniAvviso(a, regs).length > 0;
             // non e' per questo editor, almeno per ora: resta da mostrare se scarica la regione
-            if (!destinatario) continue;
+            if (!regioniAvviso(a, regs).length && Array.isArray(a.regioni) && a.regioni.length) continue;
             visti.push(id);
             try { GM_setValue(AVVISI_VISTI, JSON.stringify(visti)); } catch { /* al massimo si ripete */ }
-            const bottone = aggiorna ? { buttonText: 'Aggiorna', action: 'aggiorna-da-avviso' }
-                : a.link && /^https:\/\//.test(a.link.url || '') ? { buttonText: String(a.link.testo || 'Apri').slice(0, 30), buttonURL: a.link.url } : {};
+            const bottone = a.link && /^https:\/\//.test(a.link.url || '') ? { buttonText: String(a.link.testo || 'Apri').slice(0, 30), buttonURL: a.link.url } : {};
             client.notification.add({ id, title: String(a.titolo).slice(0, 120), message: String(a.testo).slice(0, 1500), ...bottone });
             mostrati++;
         }
-    }
-
-    // Il bottone Aggiorna di un avviso: rilegge avvisi.json e scarica di nuovo le regioni che,
-    // adesso, risultano ancora da aggiornare (la notifica puo' essere li' da giorni).
-    async function aggiornaDaAvviso() {
-        const avvisa = await prontoPerDownloadDaNotifica();
-        if (!avvisa) return;
-        let voci;
-        try { voci = JSON.parse(await gmGetText(AVVISI_URL)); }
-        catch (e) { avvisa(`${SCRIPT_NAME}: non riesco a controllare che cosa aggiornare, riprova fra poco.`); return; }
-        const regs = await idb.all('regioni');
-        const list = [...new Set((Array.isArray(voci) ? voci : []).flatMap(a => a ? regioniDaAggiornare(a, regs) : []))];
-        if (!list.length) { avvisa(`${SCRIPT_NAME}: i dati che hai in locale sono gi\u00e0 aggiornati.`); return; }
-        await downloadRegions(list, 'Download dei dati aggiornati', ui.aggiorna);
     }
 
     // Il controllo vero: 1 byte per regione in locale, una regione alla volta, al massimo una
@@ -1440,16 +1453,17 @@
     // sempre una scelta dell'editor. Da qui passa anche la notifica nella campanella.
     function markUpdateDue(regs) {
         aggiornaAvvisoDataset(regs);
+        aggiornaAvvisoFonti(regs);
         if (!ui.aggiorna) return;
         const vecchie = (regs || []).filter(r => r.quando && (Date.now() - r.quando) / 86400000 > STALE_DAYS);
         const nuove = regioniConDatasetNuovo(regs);
-        const fvg = (regs || []).some(fvgMancante);
-        const due = vecchie.length > 0 || nuove.length > 0 || fvg;
+        const fonti = [...new Set((regs || []).flatMap(fontiMancanti))];
+        const due = vecchie.length > 0 || nuove.length > 0 || fonti.length > 0;
         ui.aggiorna.classList.toggle('wfit-due', due);
         if (nuove.length) {
             ui.aggiorna.title = `ANNCSU ha pubblicato dati nuovi per ${nuove.map(n => `${n.nome} (dataset del ${n.remoto})`).join(', ')}: premi per effettuare nuovamente il download.`;
-        } else if (fvg) {
-            ui.aggiorna.title = 'Effettua di nuovo il download del Friuli-Venezia Giulia per avere anche i civici della banca dati regionale.';
+        } else if (fonti.length) {
+            ui.aggiorna.title = `${[...new Set(fonti.map(f => regNome(f.reg)))].join(', ')}: effettua di nuovo il download per avere anche i civici ${fonti.map(f => f.ente).join(' e ')}.`;
         } else if (vecchie.length) {
             const g = Math.max(...vecchie.map(r => Math.floor((Date.now() - r.quando) / 86400000)));
             ui.aggiorna.title = `Sono passati ${g} giorni dal download di ${vecchie.map(r => r.nomeReg || r.reg).join(', ')}: ANNCSU aggiorna i dataset ogni mese, conviene effettuare nuovamente il download.`;
@@ -1753,14 +1767,8 @@
   </div>
   <div class="wfit-row">
     <label>Raggio (m)</label><input type="number" id="wfit-raggio" min="1" max="50" step="1" style="max-width:70px" title="Distanza massima civico-segmento per il confronto (da 1 a 50 m, predefinito 10). Oltre i 45 m Waze rifiuta i civici, quindi un raggio pi\u00f9 largo non servirebbe. Nota: i punti ANNCSU stanno su edifici/ingressi, spesso a 5-20 m dall'asse della strada: con raggi molto stretti potresti perdere civici legittimi, con raggi larghi includere anche le vie vicine.">
-    <label><input type="checkbox" id="wfit-titlecase"> Formato Waze</label>
   </div>
-  <div class="wfit-row">
-    <label><input type="checkbox" id="wfit-autoan"> Auto-analisi</label>
-    <label title="Dopo ogni cattura con il tasto (ALT + clic, o la combinazione che hai scelto) la barra laterale passa da sola a Script &rarr; Fonti IT e scorre fino ai Risultati, dove vedi nomi e civici dei segmenti in lista. Spegnila se preferisci restare sulla sezione in cui stai lavorando."><input type="checkbox" id="wfit-apri"> Apri i risultati</label>
-    <label><input type="checkbox" id="wfit-dots"> Civici sulla mappa</label>
-  </div>
-  <div class="wfit-row" id="wfit-dotsizerow" title="Dimensione dei pallini dei civici e dei loro numeri sulla mappa. Serve solo a vedere meglio: non cambia nulla di ci&ograve; che finisce su Waze.">
+  <div class="wfit-row" title="Dimensione dei pallini dei civici e dei loro numeri sulla mappa. Serve solo a vedere meglio: non cambia nulla di ci&ograve; che finisce su Waze.">
     <label>Pallini</label>
     <select id="wfit-dotsize">
       <option value="piccoli">Piccoli</option>
@@ -1786,9 +1794,9 @@
 
   <details class="wfit-guide"><summary><b>&#8505;&#65039; Come funziona</b></summary>
     <p><span class="wfit-gnum">1 &middot; Scarica i dati.</span> Scegli la regione e premi <b>Scarica regione</b>: lo script legge l'archivio ufficiale ANNCSU (Istat / Agenzia delle Entrate) e salva in locale tutti i civici georiferiti. La cache resta anche ai prossimi avvii, quindi non serve rifarlo a ogni sessione. ANNCSU aggiorna per&ograve; i dataset regionali con <b>cadenza mensile</b> e in questo periodo i Comuni stanno completando la georeferenziazione dei civici (in Italia per ora solo una parte &egrave; geolocalizzata): un giro ogni <b>4&ndash;6 settimane</b> pu&ograve; far comparire strade e numeri prima assenti. Nel pannello trovi sempre scritto da quanti giorni hai scaricato ogni regione (si evidenzia oltre 35 giorni, solo come promemoria: <b>lo script non riscarica mai da solo</b>). Sotto <b>Altre opzioni dati</b>, <b>Scarica tutte</b> le prende una dopo l'altra (alcuni minuti: te lo chiede prima di partire), mentre <b>Aggiorna</b> riscarica quelle che hai gi&agrave; in locale (e si accende di verde quando i tuoi dati hanno passato i 35 giorni); in tutti e due i casi il pulsante diventa <b>Ferma</b> e il ciclo si interrompe dopo la regione in corso. <b>Svuota dati</b> riparte da zero. I dati ANNCSU sono <b>open data</b> rilasciati con licenza ${licLink('Creative Commons Attribuzione 4.0 (CC-BY 4.0)')}: si possono riutilizzare anche su Waze, purch&eacute; sia citata la fonte.</p>
-    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Un secondo clic lo toglie, cos&igrave; come la &times; sul chip; il clic sul chip lo seleziona nell&#39;editor. Dal menu <b>Cattura</b> puoi passare ad <b>ALT + MAIUSC</b>, <b>CTRL/&#8984; + ALT</b> o a un tasto a tua scelta (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione). Dopo ogni cattura, da qualunque sezione tu sia (Revisiona, Eventi, un altro script&hellip;), la barra laterale si porta da sola su <b>Script &rarr; Fonti IT</b> e scende fino ai <b>Risultati</b>: se sei gi&agrave; su Fonti IT scende ai Risultati solo se non li hai gi&agrave; davanti, altrimenti resta ferma, con nomi e civici dei segmenti in lista (se preferisci restare dove sei, togli la spunta <b>Apri i risultati</b>). Se preferisci selezionare nell&#39;editor e basta, usa <b>Aggiungi selezione attuale</b>: mette in lista tutto quello che hai selezionato, anche dopo una multi-selezione. I chip rossi indicano i segmenti dove l&#39;ultimo Applica &egrave; fallito.</p>
+    <p><span class="wfit-gnum">2 &middot; Cattura i segmenti.</span> <b>ALT + clic</b> su un segmento lo mette in lista e lo evidenzia sulla mappa (bordo scuro + tratteggio nel colore che scegli dal menu <b>Evidenzia</b>). Un secondo clic lo toglie, cos&igrave; come la &times; sul chip; il clic sul chip lo seleziona nell&#39;editor. Dal menu <b>Cattura</b> puoi passare ad <b>ALT + MAIUSC</b>, <b>CTRL/&#8984; + ALT</b> o a un tasto a tua scelta (combinazioni scelte apposta perch&eacute; non le usano n&eacute; il WME n&eacute; gli script pi&ugrave; diffusi: MAIUSC e CTRL da soli, invece, servono al WME per la multi&#8209;selezione). Dopo ogni cattura, da qualunque sezione tu sia (Revisiona, Eventi, un altro script&hellip;), la barra laterale si porta da sola su <b>Script &rarr; Fonti IT</b> e scende fino ai <b>Risultati</b>: se sei gi&agrave; su Fonti IT scende ai Risultati solo se non li hai gi&agrave; davanti, altrimenti resta ferma, con nomi e civici dei segmenti in lista. Se preferisci selezionare nell&#39;editor e basta, usa <b>Aggiungi selezione attuale</b>: mette in lista tutto quello che hai selezionato, anche dopo una multi-selezione. I chip rossi indicano i segmenti dove l&#39;ultimo Applica &egrave; fallito.</p>
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
-    <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Con l'<b>Auto-analisi</b> il confronto parte da solo, altrimenti premi il pulsante: entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
+    <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Il confronto parte da solo a ogni cattura (il pulsante serve a ripeterlo, per esempio dopo aver cambiato il raggio): entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Se i segmenti in lista su Waze hanno un <b>nome diverso</b> dall&#39;odonimo ANNCSU, la scheda lo dice con un <b>avviso rosso</b> (su Waze / ANNCSU a confronto) e prima di applicare ti chiede conferma; un nome solo <b>simile</b> (abbreviato, senza nome di battesimo) ha un avviso arancione. Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori dal centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
     <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il pulsante con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato <b>numero/esponente maiuscolo</b>: <b>343/A</b>, <b>12/BIS</b> (anche TER e QUATER); se scrivi <b>75a</b> o <b>75 a</b> diventa <b>75/A</b>. Waze ora accetta qualsiasi formato: quelli insoliti (<b>20/1</b>) restano in lista <b>senza spunta</b>, col bordo ambra <b>da verificare</b>: se sul posto sono giusti li spunti tu e vengono inseriti. A <b>Genova, Savona e Firenze</b> lo script legge anche la numerazione <b>rossa e nera</b> (campo SPECIFICITA di ANNCSU): i neri restano come ovunque (<b>4, 4/A</b>, anche <b>3/R</b>), i rossi prendono la R (<b>3R, 3R/A</b>); in elenco vengono prima i neri e poi i rossi, e lato e sequenza si controllano separatamente per le due numerazioni. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il pulsante <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso, che prende il nome della via su cui si affaccia. Ogni civico sta su <b>una riga sola</b> (spunta, numero, distanza, Street View): lo stato lo dice il colore del bordo, spiegato nella legenda sopra l'elenco; se il pannello &egrave; largo compare anche una nota corta, e passando il mouse sulla riga leggi la spiegazione completa. Anche <b>fuori dal centro abitato</b> si inseriscono civici normali: li rende ricercabili il nome alternativo con la citt&agrave;. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
     <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito; <b>"gi&agrave; su Waze ma posizionato male"</b> &rarr; il numero c'&egrave; gi&agrave; su questa strada in un altro punto: trascina quello esistente sul punto giusto, non aggiungerne un altro. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
@@ -1823,12 +1831,7 @@
                 addSel: p.querySelector('#wfit-add-sel'),
                 clearCap: p.querySelector('#wfit-clear-cap'),
                 raggio: p.querySelector('#wfit-raggio'),
-                titlecase: p.querySelector('#wfit-titlecase'),
-                autoan: p.querySelector('#wfit-autoan'),
-                apri: p.querySelector('#wfit-apri'),
-                dots: p.querySelector('#wfit-dots'),
                 dotsize: p.querySelector('#wfit-dotsize'),
-                dotsizerow: p.querySelector('#wfit-dotsizerow'),
                 amExtra: p.querySelector('#wfit-am-extra'),
                 amUrb: p.querySelector('#wfit-am-urb'),
                 analizza: p.querySelector('#wfit-analizza'),
@@ -1840,16 +1843,11 @@
     // Porta nel pannello i valori salvati nelle impostazioni
     function applySettingsToUi() {
         ui.raggio.value = settings.raggio;
-        ui.titlecase.checked = settings.titleCase;
         ui.capmode.value = settings.captureMode;
         ui.hlcolor.value = settings.hlColor;
         if (ui.hlcolor.value !== settings.hlColor) { settings.hlColor = '#00e5ff'; ui.hlcolor.value = settings.hlColor; }
-        ui.autoan.checked = settings.autoAnalyze;
-        ui.apri.checked = settings.apriRisultati;
-        ui.dots.checked = settings.showDots;
         ui.dotsize.value = settings.dotSize;
         if (!ui.dotsize.value) { settings.dotSize = 'normale'; ui.dotsize.value = 'normale'; }
-        ui.dotsizerow.style.display = settings.showDots ? '' : 'none';
         (settings.applyMode === 'urb' ? ui.amUrb : ui.amExtra).checked = true;
         if (settings.reg) ui.regione.value = settings.reg;
 
@@ -1863,7 +1861,6 @@
             ui.raggio.value = settings.raggio; // il valore corretto si vede subito nella casella
             saveSettings();
         });
-        ui.titlecase.addEventListener('change', () => { settings.titleCase = ui.titlecase.checked; saveSettings(); renderResults(lastResults); });
         ui.capmode.addEventListener('change', () => {
             const v = ui.capmode.value;
             if (v === 'custom') {
@@ -1888,15 +1885,6 @@
         });
         updateKeyRow();
         ui.hlcolor.addEventListener('change', () => { settings.hlColor = ui.hlcolor.value; saveSettings(); refreshMapLayer(); });
-        ui.autoan.addEventListener('change', () => { settings.autoAnalyze = ui.autoan.checked; saveSettings(); });
-        ui.apri.addEventListener('change', () => { settings.apriRisultati = ui.apri.checked; saveSettings(); });
-        ui.dots.addEventListener('change', () => {
-            settings.showDots = ui.dots.checked; saveSettings();
-            ui.dotsizerow.style.display = settings.showDots ? '' : 'none';
-            if (!settings.showDots) { refreshMapLayer(); return; }
-            if (lastDotFeatures.length) refreshMapLayer();
-            else if (captured.size && mem.n) analyze();
-        });
         // La misura sta nelle proprieta' di ogni punto: per cambiarla basta ridisegnare i punti
         ui.dotsize.addEventListener('change', () => {
             settings.dotSize = DOT_SIZES[ui.dotsize.value] ? ui.dotsize.value : 'normale';
@@ -2065,9 +2053,10 @@
     // onProgress(frazione 0..1, testo) permette al chiamante di comporre una barra complessiva.
     async function fetchRegionRecord(reg, onProgress) {
         const nome = regNome(reg);
-        // FVG: ANNCSU occupa il 60% della barra, il resto e' la banca dati regionale
-        const racc = reg === FVG_REG ? fvgRaccoglitore() : null;
-        const barra = onProgress, quota = racc ? 0.6 : 1;
+        // Regioni con fonti locali: ad ANNCSU resta la parte di barra che le fonti non occupano
+        const fonti = FONTI_LOCALI.filter(f => f.reg === reg);
+        const racc = fonti.length ? raccoglitoreAnncsu(fonti) : null;
+        const barra = onProgress, quota = 1 - fonti.reduce((t, f) => t + f.barra, 0);
         onProgress = (f, t) => barra(f * quota, t);
         // nome dello zip (indirizzarioPuglia20260915.zip): la sua data e' quella che il controllo
         // dei nuovi dataset confronta con quella pubblicata
@@ -2091,11 +2080,10 @@
 
         const rec = await parseIndirToRecord(new Uint8Array(buf), reg, nome,
             (p, read, kept) => onProgress(0.45 + p * 0.55, `Elaboro ${nome}\u2026 ${Math.round(p * 100)}% &middot; lette ${fmtN(read)} &middot; con coordinate ${fmtN(kept)}`), racc);
-        if (racc && rec.count) await fvgIntegra(rec, racc.chiudi(), (f, t) => barra(quota + f * (1 - quota), t));
+        if (racc && rec.count) await integraFonti(rec, fonti, racc.chiudi(), (f, t) => barra(quota + f * (1 - quota), t));
         rec.fileDate = fileDate;
         rec.zipName = zipName;
         rec.zipDate = extractDateFromFilename(zipName);
-        rec.ver = VERSION;   // per gli avvisi "download_prima_della_versione"
         if (rec.count) await idb.put('regioni', rec);
         return rec;
     }
@@ -2106,11 +2094,15 @@
         status(`Pronto: <b>${fmtN(mem.n)}</b> civici in memoria (~${mb} MB, ${regs.map(r => r.nomeReg || r.reg).join(', ')}).${regionsDateLabel(regs)} Cache locale: al prossimo avvio &egrave; gi&agrave; tutto caricato.`);
     }
 
-    // Riga del messaggio finale sulla banca dati regionale del FVG
-    function fvgEsito(rec) {
-        if (!rec.fvg) return '';
-        if (rec.fvg.errore) return ' Banca dati regionale del FVG non raggiungibile: per ora hai solo i civici ANNCSU, riprova pi\u00f9 tardi con Aggiorna.';
-        return ` Dalla banca dati regionale: coordinate per ${fmtN(rec.fvg.riempiti)} civici che in ANNCSU ne erano privi e ${fmtN(rec.fvg.nuovi)} civici in pi\u00f9.`;
+    // Frasi del messaggio finale sulle fonti locali della regione
+    const fontiKo = rec => FONTI_LOCALI.filter(f => f.reg === rec.reg && (esitoFonte(rec, f) || {}).errore);
+    function frasiFonti(rec) {
+        return FONTI_LOCALI.filter(f => f.reg === rec.reg && esitoFonte(rec, f)).map(f => {
+            const e = esitoFonte(rec, f);
+            return e.errore
+                ? ` Banca dati ${f.ente} non raggiungibile: l\u00ec per ora hai solo i civici ANNCSU, riprova pi\u00f9 tardi con Aggiorna.`
+                : ` Dalla banca dati ${f.ente}: coordinate per ${fmtN(e.riempiti)} civici che in ANNCSU ne erano privi e ${fmtN(e.nuovi)} civici in pi\u00f9.`;
+        }).join('');
     }
 
     async function downloadRegion(reg) {
@@ -2127,8 +2119,8 @@
         rebuildMemory(regs);
         endBusy();
         readyStatus(regs);
-        toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (rec.fileDate ? ` Dataset del ${rec.fileDate}.` : '') + fvgEsito(rec),
-            rec.fvg ? 10000 : undefined);
+        toast(`${regNome(reg)}: ${fmtN(rec.count)} civici georiferiti, ${fmtN(rec.groups.length)} odonimi.` + (rec.fileDate ? ` Dataset del ${rec.fileDate}.` : '') + frasiFonti(rec),
+            rec.fonti ? 10000 : undefined);
     }
 
     // Ciclo su piu' regioni: una alla volta, con barra complessiva e possibilita' di fermarsi.
@@ -2139,7 +2131,7 @@
         batchRunning = true; abortBatch = false;
         if (btn) { btn.disabled = false; btn.textContent = 'Ferma'; }
         const ok = [], ko = [];
-        let fvgKo = false;
+        const fontiGiu = [];
         for (let i = 0; i < list.length; i++) {
             if (abortBatch) break;
             const reg = list[i];
@@ -2150,7 +2142,7 @@
                     status(`${capo} &middot; ${txt}`);
                 });
                 if (rec.count) ok.push(regNome(reg)); else ko.push(regNome(reg));
-                if (rec.fvg && rec.fvg.errore) fvgKo = true;
+                fontiGiu.push(...fontiKo(rec));
             } catch (e) {
                 ko.push(regNome(reg));
                 log(`regione ${reg} KO:`, e && e.message);
@@ -2165,8 +2157,8 @@
         let msg = fermato ? 'Fermato dall\'utente. ' : '';
         msg += `${ok.length} ${pl(ok.length, 'regione', 'regioni')} a posto`;
         if (ko.length) msg += `, ${ko.length} ${pl(ko.length, 'non riuscita', 'non riuscite')}: ${ko.join(', ')} (riprova singolarmente)`;
-        if (fvgKo) msg += '. Banca dati regionale del FVG non raggiungibile: per il Friuli-Venezia Giulia per ora hai solo i civici ANNCSU, riprova pi\u00f9 tardi con Aggiorna';
-        toast(msg + '.', ko.length || fvgKo ? 12000 : 7000);
+        for (const f of fontiGiu) msg += `. Banca dati ${f.ente} non raggiungibile: l\u00ec per ora hai solo i civici ANNCSU, riprova pi\u00f9 tardi con Aggiorna`;
+        toast(msg + '.', ko.length || fontiGiu.length ? 12000 : 7000);
     }
 
     // Richiesta di stop: il ciclo si ferma dopo la regione che sta elaborando (quella non si butta via)
@@ -2238,7 +2230,7 @@
         };
     }
 
-    // racc (facoltativo, solo FVG) riceve ogni civico, anche senza coordinate: vedi fvgRaccoglitore
+    // racc (facoltativo, regioni con fonti locali) riceve ogni civico, anche senza coordinate: vedi raccoglitoreAnncsu
     async function parseIndirToRecord(u8, reg, nomeReg, onProgress, racc) {
         const lons = growBuf(Float32Array), lats = growBuf(Float32Array),
             gids = growBuf(Uint32Array), civn = growBuf(Uint16Array), cive = growBuf(Uint16Array);
@@ -2538,39 +2530,61 @@
     }
 
     /* ------------------------------------------------------------------ */
-    /* Friuli-Venezia Giulia: civici della banca dati regionale           */
+    /* Fonti locali: civici di Regioni e Province che completano ANNCSU   */
     /* ------------------------------------------------------------------ */
-    // In FVG ANNCSU ha le coordinate solo per 4 civici su 10, e in 131 comuni su 215 per nessuno
-    // (dataset del 02/11/2026). La Regione pubblica la numerazione civica georiferita per quasi tutti
-    // i comuni (dati.friuliveneziagiulia.it, licenza IODL 2.0) in due dataset: "Numeri Civici Ascot"
-    // (196 comuni) e "Numeri Civici Non ASCOT" (altri 9). Dopo il download ANNCSU del FVG lo script
-    // li incrocia con l'archivio nazionale, civico per civico:
+    // In alcune zone ANNCSU ha molti civici senza coordinate, mentre l'ente locale pubblica come
+    // open data la propria numerazione civica georiferita. Dopo il download ANNCSU della regione
+    // lo script legge anche quelle fonti e le incrocia con l'archivio nazionale, civico per civico:
     //  - gia' in ANNCSU con coordinate: resta quello di ANNCSU;
-    //  - in ANNCSU senza coordinate: prende le coordinate regionali e tiene l'odonimo di ANNCSU;
+    //  - in ANNCSU senza coordinate: prende le coordinate locali e tiene l'odonimo di ANNCSU;
     //  - assente da ANNCSU ma su una via che ANNCSU ha in quel comune: si aggiunge, con l'odonimo
     //    di ANNCSU;
     //  - tutto il resto (via che ANNCSU non ha, nome ambiguo, comune non riconosciuto) si scarta:
     //    meglio un civico in meno che un odonimo che ANNCSU non conferma.
-    // L'integrazione l'ha suggerita Luca74ts.
-    const FVG_REG = 'FRIU';
-    const FVG_API = 'https://www.dati.friuliveneziagiulia.it/resource/';
-    const FVG_PAGINA = 100000;          // righe per richiesta: il dataset Ascot ne ha circa 373.000
-    const FVG_STIMA_CIVICI = 400000;    // solo per la barra di avanzamento
-    const FVG_VICINO_M = 60;            // stesso numero a meno di 60 m su un'altra grafia della via = stesso civico
-    // Comuni fusi che la banca dati regionale riporta ancora con il vecchio codice ISTAT:
-    // Fiumicello (030038) dal 2018 e' Fiumicello Villa Vicentina (030190)
-    const FVG_COMUNI_FUSI = { '030038': '030190' };
-    const FVG_DATASET = [
-        { id: 'fcre-uegn', nome: 'Numeri Civici Ascot',
-          select: 'the_geom,istat_comu,denominaz2,num_civico,esponente_',
-          campi: f => [f[1], f[2], f[3], f[4]] },
-        { id: 'd28y-fjtt', nome: 'Numeri Civici Non ASCOT',
-          select: 'the_geom,cod_istat,specie,denominazi,num_civ,barrato',
-          campi: f => [f[1], f[2] + ' ' + f[3], f[4], f[5]] }
+    // Una fonte entra in elenco solo se ha le coordinate ed e' tenuta aggiornata. Ognuna copre le
+    // proprie province, e l'incrocio e' uno solo per regione: lo stesso civico entra una volta sola
+    // anche se un giorno due fonti coprissero lo stesso comune.
+    //  id: chiave dell'esito nel record della regione      reg: regione ANNCSU che la contiene
+    //  ente: come si nomina nei messaggi ("Banca dati <ente>")
+    //  province: prime 3 cifre del codice ISTAT dei comuni coperti (assente = tutta la regione)
+    //  barra: quanta parte della barra di avanzamento le spetta      stima: civici attesi
+    const FONTI_LOCALI = [
+        // In FVG ANNCSU ha le coordinate solo per 4 civici su 10, e in 131 comuni su 215 per nessuno
+        // (dataset del 02/11/2026). La Regione pubblica i civici di quasi tutti i comuni in due
+        // dataset (licenza IODL 2.0). L'integrazione l'ha suggerita Luca74ts.
+        { id: 'fvg', reg: 'FRIU', ente: 'della Regione Friuli-Venezia Giulia', barra: 0.4, stima: 400000,
+          scarica: scaricaSocrata, api: 'https://www.dati.friuliveneziagiulia.it/resource/',
+          // Fiumicello (030038) dal 2018 e' Fiumicello Villa Vicentina (030190): la Regione usa ancora il vecchio codice
+          comuniFusi: { '030038': '030190' },
+          dataset: [
+              { id: 'fcre-uegn',   // Numeri Civici Ascot: 196 comuni
+                select: 'the_geom,istat_comu,denominaz2,num_civico,esponente_',
+                campi: f => civicoLocale(f[1], f[2], f[3], f[4], ...puntoWkt(f[0])) },
+              { id: 'd28y-fjtt',   // Numeri Civici Non ASCOT: altri 9 comuni
+                select: 'the_geom,cod_istat,specie,denominazi,num_civ,barrato',
+                campi: f => civicoLocale(f[1], f[2] + ' ' + f[3], f[4], f[5], ...puntoWkt(f[0])) }
+          ] },
+        // In Alto Adige ANNCSU non ha coordinate in 16 comuni su 116 (dataset del 02/11/2026). La
+        // Provincia pubblica l'indirizzario di tutti i comuni (licenza CC0), aggiornato di continuo.
+        { id: 'bz', reg: 'TREN', ente: 'della Provincia autonoma di Bolzano', province: ['021'], barra: 0.3, stima: 146000,
+          scarica: scaricaBolzano }
     ];
+    const VICINO_M = 60;   // stesso numero a meno di 60 m su un'altra grafia della via = stesso civico
 
-    // Una riga del CSV di dati.friuliveneziagiulia.it: campi separati da virgola, tra virgolette
-    // quando serve, con le virgolette interne raddoppiate.
+    // Un civico di una fonte locale: [istat a 6 cifre, odonimo, numero, esponente, lon, lat]
+    function civicoLocale(ist, den, num, esp, lon, lat) {
+        if (!isFinite(lon) || !isFinite(lat)) return null;
+        return [String(ist || '').trim().padStart(6, '0'), String(den || '').trim(), parseInt(num, 10),
+            String(esp || '').trim().toUpperCase(), lon, lat];
+    }
+    // "POINT (13.2 46.1)" -> [13.2, 46.1]; dei MULTIPOINT vale il primo punto
+    function puntoWkt(s) {
+        const p = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/.exec(s || '');
+        return p ? [+p[1], +p[2]] : [NaN, NaN];
+    }
+
+    // Una riga di CSV: campi separati da virgola, tra virgolette quando serve, con le virgolette
+    // interne raddoppiate.
     function campiCsv(riga) {
         const out = [];
         let cur = '', q = false;
@@ -2588,14 +2602,15 @@
         return out;
     }
 
-    // Tutti i civici regionali, pagina per pagina: [istat a 6 cifre, odonimo, numero, esponente, lon, lat]
-    async function fvgScaricaCivici(onProgress) {
+    // Portali open data Socrata (dati.friuliveneziagiulia.it): un dataset alla volta, a pagine
+    const SOCRATA_PAGINA = 100000;
+    async function scaricaSocrata(f, onProgress) {
         const civici = [];
         let data = 0;
-        for (const ds of FVG_DATASET) {
-            for (let off = 0; ; off += FVG_PAGINA) {
-                onProgress(Math.min(0.95, civici.length / FVG_STIMA_CIVICI), `Download banca dati regionale FVG\u2026 ${fmtN(civici.length)} civici`);
-                const url = `${FVG_API}${ds.id}.csv?$select=${ds.select}&$order=:id&$limit=${FVG_PAGINA}&$offset=${off}`;
+        for (const ds of f.dataset) {
+            for (let off = 0; ; off += SOCRATA_PAGINA) {
+                onProgress(Math.min(0.95, civici.length / f.stima), `Download dei civici ${f.ente}\u2026 ${fmtN(civici.length)}`);
+                const url = `${f.api}${ds.id}.csv?$select=${ds.select}&$order=:id&$limit=${SOCRATA_PAGINA}&$offset=${off}`;
                 let intestazioni = '';
                 const buf = await gmFetchBinary(url, null, 180000, h => { intestazioni = h || ''; });
                 const righe = new TextDecoder('utf-8').decode(buf).split(/\r?\n/);
@@ -2604,34 +2619,52 @@
                 for (const r of righe) {
                     if (!r) continue;
                     lette++;
-                    const f = campiCsv(r);
-                    const p = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/.exec(f[0] || '');   // primo punto di POINT / MULTIPOINT
-                    if (!p) continue;
-                    const [ist, den, num, esp] = ds.campi(f);
-                    const cod = String(ist || '').trim().padStart(6, '0');
-                    civici.push([FVG_COMUNI_FUSI[cod] || cod, String(den || '').trim(),
-                        parseInt(num, 10), String(esp || '').trim().toUpperCase(), +p[1], +p[2]]);
+                    const c = ds.campi(campiCsv(r));
+                    if (c) civici.push(c);
                 }
                 // data dell'ultimo aggiornamento dei dati, dalla risposta stessa
                 const m = /x-soda2-truth-last-modified:\s*([^\r\n]+)/i.exec(intestazioni);
                 const t = m ? Date.parse(m[1]) : NaN;
                 if (isFinite(t) && t > data) data = t;
-                if (lette < FVG_PAGINA) break;
+                if (lette < SOCRATA_PAGINA) break;
                 await tick();
             }
         }
-        if (!civici.length) throw new Error('nessun civico ricevuto');
         return { civici, data: data ? new Date(data).toLocaleDateString('it-IT') : null };
     }
 
-    // Raccoglie dal file ANNCSU del FVG ogni civico, anche senza coordinate (sono proprio quelli da
-    // completare). Colonne tipizzate e testi in dizionario: sono circa 600.000 righe.
-    function fvgRaccoglitore() {
+    // Provincia autonoma di Bolzano: tutto l'indirizzario in una sola richiesta WFS, in CSV.
+    // Le colonne arrivano nell'ordine che decide il server: si leggono dall'intestazione.
+    const BOLZANO_URL = 'https://geoservices3.civis.bz.it/geoserver/gvcc-Address/ows?service=WFS&version=2.0.0&request=GetFeature' +
+        '&typeNames=gvcc-Address:Addresses&outputFormat=csv&srsName=CRS:84&propertyName=ISTAT,STRT_IT,HOUSENUMBER,GEOMETRY';
+    async function scaricaBolzano(f, onProgress) {
+        onProgress(0.05, `Download dei civici ${f.ente}\u2026`);
+        const righe = new TextDecoder('utf-8').decode(await gmFetchBinary(BOLZANO_URL, null, 180000)).split(/\r?\n/);
+        const col = campiCsv(righe.shift() || '');
+        const iIst = col.indexOf('ISTAT'), iDen = col.indexOf('STRT_IT'), iNum = col.indexOf('HOUSENUMBER'), iGeo = col.indexOf('GEOMETRY');
+        if (Math.min(iIst, iDen, iNum, iGeo) < 0) throw new Error('colonne non riconosciute');
+        const civici = [];
+        for (const r of righe) {
+            if (!r) continue;
+            const c = campiCsv(r);
+            const n = /^(\d+)(?:\/(.+))?$/.exec((c[iNum] || '').trim());   // "12", "2/F", "3/A/2"
+            const v = n && civicoLocale(c[iIst], c[iDen], n[1], n[2], ...puntoWkt(c[iGeo]));
+            if (v) civici.push(v);
+        }
+        return { civici, data: null };
+    }
+
+    // Raccoglie dal file ANNCSU ogni civico delle province coperte da una fonte locale, anche senza
+    // coordinate (sono proprio quelli da completare). Colonne tipizzate e testi in dizionario: nel
+    // solo FVG sono circa 600.000 righe.
+    function raccoglitoreAnncsu(fonti) {
+        const province = fonti.every(f => f.province) ? new Set(fonti.flatMap(f => f.province)) : null;
         const testi = interner(Infinity);
         const den = growBuf(Uint32Array), loc = growBuf(Uint32Array), bel = growBuf(Uint32Array), ist = growBuf(Uint32Array),
             esp = growBuf(Uint32Array), num = growBuf(Uint16Array), lon = growBuf(Float32Array), lat = growBuf(Float32Array);
         return {
             riga(b, i, d, l, n, e, x, y) {
+                if (province && !province.has(i.slice(0, 3))) return;
                 bel.push(testi.index(b)); ist.push(testi.index(i)); den.push(testi.index(d)); loc.push(testi.index(l));
                 num.push(n); esp.push(testi.index(e)); lon.push(x); lat.push(y);
             },
@@ -2645,25 +2678,25 @@
 
     // Confronto fra grafie dello stesso odonimo: "VIA G. VERDI" e "VIA GIUSEPPE VERDI",
     // "VIA I MAGGIO" e "VIA PRIMO MAGGIO", "FRAZ. PRATO" e "FRAZIONE PRATO".
-    const fvgNorm = s => String(s || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    const cfrNorm = s => String(s || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .replace(/[^A-Z0-9]+/g, ' ').trim();
-    const FVG_DUG = new Set(('VIA VIALE VICOLO PIAZZA PIAZZALE PIAZZETTA CORSO LARGO STRADA STRADONE CONTRADA LOCALITA ' +
+    const CFR_DUG = new Set(('VIA VIALE VICOLO PIAZZA PIAZZALE PIAZZETTA CORSO LARGO STRADA STRADONE CONTRADA LOCALITA ' +
         'FRAZIONE BORGO BORGATA RIVA RIONE SALITA SCALINATA CALLE CAMPO CAMPIELLO PASSAGGIO VIOTTOLO GALLERIA RAMPA ' +
         'SENTIERO TRAVERSA ANDRONA NUCLEO').split(' '));
-    const FVG_SIGLE = { FRAZ: 'FRAZIONE', LOC: 'LOCALITA', PZA: 'PIAZZA', PZZA: 'PIAZZA', VLE: 'VIALE', VLO: 'VICOLO', STR: 'STRADA' };
-    const FVG_VUOTE = new Set('DI DEL DELLA DELLE DEI DEGLI DELL D E DA DAL DALLA IN A AL ALLA ALLE AI'.split(' '));
-    const FVG_NUMERI = { PRIMO: 1, UNO: 1, DUE: 2, TRE: 3, QUATTRO: 4, CINQUE: 5, SEI: 6, SETTE: 7, OTTO: 8, NOVE: 9,
+    const CFR_SIGLE = { FRAZ: 'FRAZIONE', LOC: 'LOCALITA', PZA: 'PIAZZA', PZZA: 'PIAZZA', VLE: 'VIALE', VLO: 'VICOLO', STR: 'STRADA' };
+    const CFR_VUOTE = new Set('DI DEL DELLA DELLE DEI DEGLI DELL D E DA DAL DALLA IN A AL ALLA ALLE AI'.split(' '));
+    const CFR_NUMERI = { PRIMO: 1, UNO: 1, DUE: 2, TRE: 3, QUATTRO: 4, CINQUE: 5, SEI: 6, SETTE: 7, OTTO: 8, NOVE: 9,
         DIECI: 10, UNDICI: 11, DODICI: 12, VENTI: 20, VENTUNO: 21, VENTIDUE: 22, VENTITRE: 23, VENTIQUATTRO: 24,
         VENTICINQUE: 25, VENTISEI: 26, VENTISETTE: 27, VENTOTTO: 28, VENTINOVE: 29, TRENTA: 30, TRENTUNO: 31 };
-    const FVG_SANTI = { S: ['SAN', 'SANTO', 'SANTA', 'SANT', 'SANTI'], SS: ['SANTI', 'SANTISSIMA', 'SANTISSIMO'] };
-    function fvgParole(s) {
-        const p = fvgNorm(s).split(' ').filter(t => t && !FVG_VUOTE.has(t));
-        if (p.length && FVG_SIGLE[p[0]]) p[0] = FVG_SIGLE[p[0]];
+    const CFR_SANTI = { S: ['SAN', 'SANTO', 'SANTA', 'SANT', 'SANTI'], SS: ['SANTI', 'SANTISSIMA', 'SANTISSIMO'] };
+    function cfrParole(s) {
+        const p = cfrNorm(s).split(' ').filter(t => t && !CFR_VUOTE.has(t));
+        if (p.length && CFR_SIGLE[p[0]]) p[0] = CFR_SIGLE[p[0]];
         return p;
     }
-    const fvgDug = s => { const p = fvgParole(s); return p.length && FVG_DUG.has(p[0]) ? p[0] : ''; };
-    function fvgValore(t) {
-        if (FVG_NUMERI[t]) return FVG_NUMERI[t];
+    const cfrDug = s => { const p = cfrParole(s); return p.length && CFR_DUG.has(p[0]) ? p[0] : ''; };
+    function cfrValore(t) {
+        if (CFR_NUMERI[t]) return CFR_NUMERI[t];
         if (/^\d+$/.test(t)) return +t;
         if (!/^[IVXL]+$/.test(t)) return 0;
         const v = { I: 1, V: 5, X: 10, L: 50 };
@@ -2671,58 +2704,59 @@
         for (let i = 0; i < t.length; i++) n += v[t[i]] < (v[t[i + 1]] || 0) ? -v[t[i]] : v[t[i]];
         return n;
     }
-    function fvgParoleUguali(a, b) {
+    function cfrParoleUguali(a, b) {
         if (a === b) return true;
-        const na = fvgValore(a), nb = fvgValore(b);
+        const na = cfrValore(a), nb = cfrValore(b);
         if (na && na === nb) return true;
         if (a.length === 1 && b.startsWith(a)) return true;      // iniziale puntata
         if (b.length === 1 && a.startsWith(b)) return true;
-        return (FVG_SANTI[a] || []).includes(b) || (FVG_SANTI[b] || []).includes(a);
+        return (CFR_SANTI[a] || []).includes(b) || (CFR_SANTI[b] || []).includes(a);
     }
     // Parole significative di un odonimo, senza la DUG iniziale: ["GIUSEPPE", "VERDI"]
-    function fvgNucleo(p) {
+    function cfrNucleo(p) {
         let i = 0;
-        while (i < p.length - 1 && FVG_DUG.has(p[i])) i++;
+        while (i < p.length - 1 && CFR_DUG.has(p[i])) i++;
         return p.slice(i);
     }
     // Chiave dell'ultima parola, per cercare solo fra le vie che finiscono allo stesso modo.
     // Un'iniziale ("S", "G") puo' stare per molte parole: per quelle si guarda tutto ('*').
-    const fvgChiaveUltima = n => { const t = n[n.length - 1] || ''; const v = fvgValore(t); return v ? '#' + v : t.length > 1 && !FVG_SANTI[t] ? t : '*'; };
-    function fvgSimileParole(pa, na, pb, nb) {
+    const cfrChiaveUltima = n => { const t = n[n.length - 1] || ''; const v = cfrValore(t); return v ? '#' + v : t.length > 1 && !CFR_SANTI[t] ? t : '*'; };
+    function cfrSimili(pa, na, pb, nb) {
         // DUG diverse (VIA e PIAZZA) = vie diverse, a meno che la DUG di una sia una parola dell'altra
         // ("VIA FRAZIONE CABIA" e "FRAZIONE CABIA")
-        const da = FVG_DUG.has(pa[0]) ? pa[0] : '', db = FVG_DUG.has(pb[0]) ? pb[0] : '';
+        const da = CFR_DUG.has(pa[0]) ? pa[0] : '', db = CFR_DUG.has(pb[0]) ? pb[0] : '';
         if (da && db && da !== db && !pa.includes(db) && !pb.includes(da)) return false;
         let a = na, b = nb;
         if (!a.length || !b.length) return false;
         if (a.length > b.length) [a, b] = [b, a];
         // l'ultima parola (di solito il cognome) deve combaciare, e ogni parola del nome piu' corto
         // deve trovare la sua compagna, nello stesso ordine, in quello piu' lungo
-        if (!fvgParoleUguali(a[a.length - 1], b[b.length - 1])) return false;
+        if (!cfrParoleUguali(a[a.length - 1], b[b.length - 1])) return false;
         let j = 0;
         for (const t of a) {
-            while (j < b.length && !fvgParoleUguali(t, b[j])) j++;
+            while (j < b.length && !cfrParoleUguali(t, b[j])) j++;
             if (j === b.length) return false;
             j++;
         }
         return true;
     }
-    const fvgDistM = (x1, y1, x2, y2) => Math.hypot((x2 - x1) * Math.cos((y1 + y2) * Math.PI / 360), y2 - y1) * 111195;
+    const distM = (x1, y1, x2, y2) => Math.hypot((x2 - x1) * Math.cos((y1 + y2) * Math.PI / 360), y2 - y1) * 111195;
 
-    // Incrocio civico per civico. A: righe ANNCSU (fvgRaccoglitore), civici: banca dati regionale.
+    // Incrocio civico per civico. A: righe ANNCSU (raccoglitoreAnncsu). Restituisce incrocia(civici),
+    // da chiamare una volta per fonte, e l'elenco "aggiunti" che tutte le fonti riempiono insieme.
     // Ogni odonimo si normalizza e si spezza in parole una volta sola, e per le vie si cerca solo fra
     // quelle che finiscono con la stessa parola: senza questi due accorgimenti l'incrocio di 400.000
     // civici bloccava il WME per 25 secondi.
-    async function fvgIncrocia(A, civici, onProgress) {
+    async function preparaIncrocio(A) {
         const T = A.testi, nomeDi = i => T[A.den[i]];
         const conCoord = i => isFinite(A.lon[i]);
         const paroleCache = new Map();
         const parole = s => {
             let w = paroleCache.get(s);
-            if (!w) { const p = fvgParole(s); w = { n: fvgNorm(s), p, nucleo: fvgNucleo(p) }; paroleCache.set(s, w); }
+            if (!w) { const p = cfrParole(s); w = { n: cfrNorm(s), p, nucleo: cfrNucleo(p) }; paroleCache.set(s, w); }
             return w;
         };
-        const simili2 = (x, y) => { const a = parole(x), b = parole(y); return fvgSimileParole(a.p, a.nucleo, b.p, b.nucleo); };
+        const simili2 = (x, y) => { const a = parole(x), b = parole(y); return cfrSimili(a.p, a.nucleo, b.p, b.nucleo); };
         const perNumero = new Map();   // istat|numero|esponente -> righe ANNCSU
         const vie = new Map();         // istat -> { esatte: odonimo normalizzato -> riga, perUltima: ultima parola -> righe }
         for (let i = 0; i < A.n; i++) {
@@ -2739,7 +2773,7 @@
             const w = parole(nomeDi(i));
             if (!v.esatte.has(w.n)) {
                 v.esatte.set(w.n, i);
-                const k = fvgChiaveUltima(w.nucleo);
+                const k = cfrChiaveUltima(w.nucleo);
                 const l = v.perUltima.get(k);
                 if (l) l.push(i); else v.perUltima.set(k, [i]);
             }
@@ -2747,7 +2781,7 @@
         // fra piu' odonimi candidati ne serve uno solo; a parita' vince quello con la stessa DUG
         const unico = (righe, den) => {
             let nomi = [...new Set(righe.map(nomeDi))];
-            if (nomi.length > 1) { const d = fvgDug(den); const s = nomi.filter(n => fvgDug(n) === d); if (s.length) nomi = s; }
+            if (nomi.length > 1) { const d = cfrDug(den); const s = nomi.filter(n => cfrDug(n) === d); if (s.length) nomi = s; }
             return nomi.length === 1 ? nomi[0] : null;
         };
         const viaCache = new Map();
@@ -2756,7 +2790,7 @@
             if (!viaCache.has(k)) {
                 let r = v.esatte.has(nn) ? v.esatte.get(nn) : -1;
                 if (r < 0) {
-                    const ku = fvgChiaveUltima(parole(den).nucleo);
+                    const ku = cfrChiaveUltima(parole(den).nucleo);
                     const vicine = ku === '*' ? [...v.perUltima.values()].flat() : [...(v.perUltima.get(ku) || []), ...(v.perUltima.get('*') || [])];
                     const simili = vicine.filter(i => simili2(nomeDi(i), den));
                     const nome = unico(simili, den);
@@ -2767,55 +2801,57 @@
             return viaCache.get(k);
         };
 
-        const aggiunti = [], usate = new Set(), chiavi = new Set(), comuniIgnoti = new Set();
-        const st = { letti: civici.length, giaPresenti: 0, riempiti: 0, nuovi: 0, scartati: 0 };
-        const aggiungi = (i, c) => {
-            const k = A.bel[i] + '|' + A.den[i] + '|' + A.loc[i] + '|' + c[2] + '|' + c[3];
-            if (chiavi.has(k)) return false;   // la banca dati regionale ripete lo stesso civico
-            chiavi.add(k);
-            aggiunti.push({ den: nomeDi(i), loc: T[A.loc[i]], bel: T[A.bel[i]], nc: c[2], es: c[3], lon: c[4], lat: c[5] });
-            return true;
-        };
-        const riempi = (i, c) => {
-            if (usate.has(i) || !aggiungi(i, c)) { st.giaPresenti++; return; }
-            usate.add(i);
-            st.riempiti++;
-        };
-        for (let k = 0; k < civici.length; k++) {
-            if ((k & 16383) === 0) { onProgress(k / civici.length); await tick(); }
-            const c = civici[k];
-            const [ist, den, nc, es, lon, lat] = c;
-            if (!(nc > 0 && nc <= 65535) || !(lon >= 6 && lon <= 19 && lat >= 35 && lat <= 48)) { st.scartati++; continue; }
-            const v = vie.get(ist);
-            if (!v) { st.scartati++; comuniIgnoti.add(ist); continue; }
-            const nn = parole(den).n;
-            const p = perNumero.get(ist + '|' + nc + '|' + es);
-            const cand = p === undefined ? [] : typeof p === 'number' ? [p] : p;
-            // 1) stesso odonimo e stesso numero
-            const stessi = cand.filter(i => parole(nomeDi(i)).n === nn);
-            if (stessi.length) {
-                if (stessi.some(conCoord)) st.giaPresenti++; else riempi(stessi[0], c);
-                continue;
+        const aggiunti = [], usate = new Set(), chiavi = new Set();
+        async function incrocia(civici, onProgress) {
+            const st = { letti: civici.length, giaPresenti: 0, riempiti: 0, nuovi: 0, scartati: 0, comuniIgnoti: new Set() };
+            const aggiungi = (i, c) => {
+                const k = A.bel[i] + '|' + A.den[i] + '|' + A.loc[i] + '|' + c[2] + '|' + c[3];
+                if (chiavi.has(k)) return false;   // le fonti locali ripetono lo stesso civico
+                chiavi.add(k);
+                aggiunti.push({ den: nomeDi(i), loc: T[A.loc[i]], bel: T[A.bel[i]], nc: c[2], es: c[3], lon: c[4], lat: c[5] });
+                return true;
+            };
+            const riempi = (i, c) => {
+                if (usate.has(i) || !aggiungi(i, c)) { st.giaPresenti++; return; }
+                usate.add(i);
+                st.riempiti++;
+            };
+            for (let k = 0; k < civici.length; k++) {
+                if ((k & 16383) === 0) { onProgress(k / civici.length); await tick(); }
+                const c = civici[k];
+                const [ist, den, nc, es, lon, lat] = c;
+                if (!(nc > 0 && nc <= 65535) || !(lon >= 6 && lon <= 19 && lat >= 35 && lat <= 48)) { st.scartati++; continue; }
+                const v = vie.get(ist);
+                if (!v) { st.scartati++; st.comuniIgnoti.add(ist); continue; }
+                const nn = parole(den).n;
+                const p = perNumero.get(ist + '|' + nc + '|' + es);
+                const cand = p === undefined ? [] : typeof p === 'number' ? [p] : p;
+                // 1) stesso odonimo e stesso numero
+                const stessi = cand.filter(i => parole(nomeDi(i)).n === nn);
+                if (stessi.length) {
+                    if (stessi.some(conCoord)) st.giaPresenti++; else riempi(stessi[0], c);
+                    continue;
+                }
+                // 2) stesso numero su un'altra grafia della stessa via ("VIA G. VERDI" e "VIA GIUSEPPE VERDI")
+                const simili = cand.filter(i => simili2(nomeDi(i), den));
+                if (simili.length) {
+                    const nome = unico(simili, den);
+                    if (nome === null) { st.scartati++; continue; }
+                    const righe = simili.filter(i => nomeDi(i) === nome);
+                    if (righe.some(conCoord)) st.giaPresenti++; else riempi(righe[0], c);
+                    continue;
+                }
+                // 3) stesso numero a pochi metri, con un nome che il confronto non riconosce ("VIA DANTE" e
+                // "VIA DANTE ALIGHIERI"): quasi sempre e' lo stesso civico, non se ne aggiunge un doppione
+                if (cand.some(i => conCoord(i) && distM(A.lon[i], A.lat[i], lon, lat) < VICINO_M)) { st.giaPresenti++; continue; }
+                // 4) numero che ANNCSU non ha, su una via che ANNCSU ha in quel comune
+                const r = viaNota(v, ist, den, nn);
+                if (r >= 0 && aggiungi(r, c)) st.nuovi++; else st.scartati++;
             }
-            // 2) stesso numero su un'altra grafia della stessa via ("VIA G. VERDI" e "VIA GIUSEPPE VERDI")
-            const simili = cand.filter(i => simili2(nomeDi(i), den));
-            if (simili.length) {
-                const nome = unico(simili, den);
-                if (nome === null) { st.scartati++; continue; }
-                const righe = simili.filter(i => nomeDi(i) === nome);
-                if (righe.some(conCoord)) st.giaPresenti++; else riempi(righe[0], c);
-                continue;
-            }
-            // 3) stesso numero a pochi metri, con un nome che il confronto non riconosce ("VIA DANTE" e
-            // "VIA DANTE ALIGHIERI"): quasi sempre e' lo stesso civico, non se ne aggiunge un doppione
-            if (cand.some(i => conCoord(i) && fvgDistM(A.lon[i], A.lat[i], lon, lat) < FVG_VICINO_M)) { st.giaPresenti++; continue; }
-            // 4) numero che ANNCSU non ha, su una via che ANNCSU ha in quel comune
-            const r = viaNota(v, ist, den, nn);
-            if (r >= 0 && aggiungi(r, c)) st.nuovi++; else st.scartati++;
+            onProgress(1);
+            return st;
         }
-        onProgress(1);
-        if (comuniIgnoti.size) log(`banca dati regionale FVG: codici ISTAT assenti in ANNCSU, civici scartati: ${[...comuniIgnoti].join(', ')}`);
-        return { aggiunti, st };
+        return { aggiunti, incrocia };
     }
 
     // Accoda i civici al record della regione (stesso formato del parsing ANNCSU)
@@ -2837,24 +2873,36 @@
         Object.assign(rec, { count: n, lons: lons.buffer, lats: lats.buffer, gids: gids.buffer, civn: civn.buffer, cive: cive.buffer, esps: espDict.list });
     }
 
-    // Download della banca dati regionale e incrocio. Se il portale non risponde il FVG resta con i
-    // soli civici ANNCSU, e il pulsante Aggiorna si accende per riprovare.
-    async function fvgIntegra(rec, A, onProgress) {
-        try {
-            const { civici, data } = await fvgScaricaCivici((f, t) => onProgress(f * 0.85, t));
-            const { aggiunti, st } = await fvgIncrocia(A, civici,
-                f => onProgress(0.85 + f * 0.15, `Incrocio i civici regionali con ANNCSU\u2026 ${Math.round(f * 100)}%`));
-            aggiungiCivici(rec, aggiunti);
-            rec.fvg = { data, riempiti: st.riempiti, nuovi: st.nuovi };
-            log(`banca dati regionale FVG (dati del ${data || '?'}): ${fmtN(st.letti)} civici letti \u00b7 ${fmtN(st.riempiti)} coordinate per civici ANNCSU che ne erano privi \u00b7 ` +
-                `${fmtN(st.nuovi)} civici nuovi su vie ANNCSU \u00b7 ${fmtN(st.giaPresenti)} gi\u00e0 presenti \u00b7 ${fmtN(st.scartati)} scartati`);
-        } catch (e) {
-            rec.fvg = { errore: e.message || String(e) };
-            log('banca dati regionale FVG non disponibile:', rec.fvg.errore);
+    // Download delle fonti locali della regione e incrocio. L'esito di ognuna resta nel record
+    // (rec.fonti): se una non risponde, li' restano i soli civici ANNCSU e il pulsante Aggiorna si
+    // accende per riprovare.
+    async function integraFonti(rec, fonti, A, onProgress) {
+        const incrocio = await preparaIncrocio(A);
+        rec.fonti = {};
+        for (const [k, f] of fonti.entries()) {
+            const barra = (x, t) => onProgress((k + x) / fonti.length, t);
+            try {
+                const { civici, data } = await f.scarica(f, (x, t) => barra(x * 0.85, t));
+                if (!civici.length) throw new Error('nessun civico ricevuto');
+                if (f.comuniFusi) for (const c of civici) c[0] = f.comuniFusi[c[0]] || c[0];
+                const st = await incrocio.incrocia(civici,
+                    x => barra(0.85 + x * 0.15, `Incrocio con ANNCSU i civici ${f.ente}\u2026 ${Math.round(x * 100)}%`));
+                rec.fonti[f.id] = { riempiti: st.riempiti, nuovi: st.nuovi };
+                log(`banca dati ${f.ente}${data ? ` (dati del ${data})` : ''}: ${fmtN(st.letti)} civici letti \u00b7 ${fmtN(st.riempiti)} coordinate per civici ANNCSU che ne erano privi \u00b7 ` +
+                    `${fmtN(st.nuovi)} civici nuovi su vie ANNCSU \u00b7 ${fmtN(st.giaPresenti)} gi\u00e0 presenti \u00b7 ${fmtN(st.scartati)} scartati` +
+                    (st.comuniIgnoti.size ? ` \u00b7 codici ISTAT assenti in ANNCSU: ${[...st.comuniIgnoti].join(', ')}` : ''));
+            } catch (e) {
+                rec.fonti[f.id] = { errore: e.message || String(e) };
+                log(`banca dati ${f.ente} non disponibile:`, rec.fonti[f.id].errore);
+            }
         }
+        aggiungiCivici(rec, incrocio.aggiunti);
     }
 
-    const fvgMancante = r => r.reg === FVG_REG && !(r.fvg && !r.fvg.errore);
+    // Esito di una fonte in un record. I download del FVG fatti con la 1.1.0 lo tengono in rec.fvg.
+    const esitoFonte = (r, f) => (r.fonti && r.fonti[f.id]) || (f.id === 'fvg' && r.fvg) || null;
+    // Fonti locali che un record non ha ancora (mai lette, o non raggiungibili all'ultimo download)
+    const fontiMancanti = r => FONTI_LOCALI.filter(f => f.reg === r.reg && !(esitoFonte(r, f) && !esitoFonte(r, f).errore));
 
     /* ------------------------------------------------------------------ */
     /* Memoria unificata + griglia spaziale                                */
@@ -3237,9 +3285,8 @@
         updateCapturedUI();
         refreshMapLayer();
         if (!captured.size) { clearResultsUI(); return; }
-        // dopo una rimozione i risultati vanno SEMPRE ricalcolati (quelli vecchi confondono);
-        // dopo un'aggiunta decide l'Auto-analisi
-        if (mem.n && (removed || (added && settings.autoAnalyze))) {
+        // a ogni modifica della lista il confronto riparte da solo
+        if (mem.n && (removed || added)) {
             clearTimeout(analyzeTimer);
             analisiInArrivo = true;
             analyzeTimer = setTimeout(() => {
@@ -3571,8 +3618,8 @@
         if (isSidebarPath(path) || (pressSnap.box && path.includes(pressSnap.box))) userNavAt = Date.now();
     }, { capture: true, passive: true });
 
-    function revealResults(forza) {
-        if ((!settings.apriRisultati && !forza) || !tabLabelEl || !tabPaneEl) return;
+    function revealResults() {
+        if (!tabLabelEl || !tabPaneEl) return;
         const token = ++revealToken;
         const start = Date.now();
         // Eri gia' su Fonti IT quando hai cliccato il segmento?
@@ -3969,10 +4016,10 @@
         refreshMapLayer();
     }
 
-    // Ridisegna il livello: prima le linee tricolore, sopra i puntini dei civici (se attivi)
+    // Ridisegna il livello: prima le linee tricolore, sopra i puntini dei civici
     function refreshMapLayer() {
         const hl = segHighlightFeatures();
-        const dots = settings.showDots ? lastDotFeatures : [];
+        const dots = lastDotFeatures;
         if (!hl.length && !dots.length) { clearCiviciLayer(); return; }
         if (!ensureLayer()) return;
         setLayerFeatures(LAYER_HL, hl);
@@ -4147,7 +4194,7 @@
         cognomiConApostrofo: ["d'annunzio", "d'azeglio", "d'acquisto", "d'amico", "d'angelo", "d'alessandro", "d'agostino", "d'amato", "d'onofrio"],
         minuscole: ['il', 'lo', 'la', 'i', 'gli', 'le', 'di', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dallo', 'dalla', 'dai', 'dagli', 'dalle', 'de', 'd', 'li', 'e', 'ed', 'a', 'ad', 'al', 'allo', 'alla', 'ai', 'agli', 'alle', 'in', 'nel', 'nello', 'nella', 'nei', 'negli', 'nelle', 'su', 'sul', 'sulla', 'sui', 'sugli', 'sulle', 'con', 'col', 'per', 'tra', 'fra', 'un', 'uno', 'una'],
         particelleCognome: ['di', 'de', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dalla', 'dalle', 'la', 'lo', 'li'],
-        cognomiConParticella: ['de amicis', 'de gasperi', 'de nicola', 'de sanctis', 'de sica', 'della chiesa', 'dalla chiesa', 'di giacomo', 'di pietro', 'di vittorio', 'la malfa', 'lo bianco'],
+        cognomiConParticella: ['de amicis', 'de gasperi', 'de nicola', 'de sanctis', 'de sica', 'di giacomo', 'di pietro', 'di vittorio', 'la malfa', 'lo bianco'],
         euristicaCognome: true,
         particelleEuristica: ['di', 'de'],
         eccezioniParticella: ['di savoia', 'di rienzo', 'dei mille', 'dalle bande nere', 'della francesca'],
@@ -4229,7 +4276,7 @@
         t = fixAccents(t);
         t = expandDotted(t);
         t = t.replace(/\b([A-Za-z])\.(?=[A-Za-z]{2,})/g, '$1. ');   // "G.MARCONI" -> "G. MARCONI"
-        if (settings.titleCase) t = titleCaseIT(t);
+        t = titleCaseIT(t);
         t = applySigle(t);
         t = applyAbbrev(t);
         t = applyDates(t);
@@ -7169,7 +7216,7 @@
                         + `${lastHNScan.come ? ' \u00b7 sorgente: ' + lastHNScan.come : ''}`
                     : '(elenco civici non ancora aperto)',
                 eventoSalvataggioVisto: saveEventSeen,
-                aperturaRisultati: `${settings.apriRisultati ? 'attiva' : 'spenta'} \u00b7 ultima: ${revealEsito}`,
+                aperturaRisultati: revealEsito,
                 sezioneAperta: sidebarTab ? `${sidebarTab} (${Math.round((Date.now() - sidebarTabAt) / 1000)} s fa)` : (sidebarEventOk ? '(nessun evento ancora)' : '(evento non disponibile)'),
                 voceScript: navDesc(scriptsNavItem()) + (navLearned ? ' \u00b7 imparata dal tuo clic' : (localStorage.getItem(NAV_KEY) ? ' \u00b7 ricordata' : ' \u00b7 cercata'))
             };
@@ -7179,7 +7226,7 @@
         // forza l'invio subito, utile per capire se il foglio risponde
         w.wfitInvia = () => { promuoviPending('invio forzato dall\'utente', 'comando wfitInvia()'); return flushLogs(); };
         // prova a mano l'apertura dei Risultati: vai su un'altra sezione e scrivi wfitApri()
-        w.wfitApri = () => { revealResults(true); return 'apertura avviata: controlla la barra laterale fra un paio di secondi'; };
+        w.wfitApri = () => { revealResults(); return 'apertura avviata: controlla la barra laterale fra un paio di secondi'; };
         // ricontrollo immediato di abilitazione e versione minima
         w.wfitControlla = () => { clearAuthCache(); return controllaAbilitazione(); };
     } catch { /* niente console */ }
