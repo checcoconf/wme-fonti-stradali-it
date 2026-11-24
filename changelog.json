@@ -1,5 +1,12 @@
 [
   {
+    "version": "1.1.0",
+    "date": "2026-11-24",
+    "changes": {
+      "it": "<ul><li><b>Friuli-Venezia Giulia: i civici della Regione.</b> In FVG ANNCSU ha le coordinate solo per circa 4 civici su 10, e in 131 comuni su 215 per nessuno. Ora, con il download del Friuli-Venezia Giulia, lo script scarica anche la banca dati della numerazione civica georiferita della Regione (dati.friuliveneziagiulia.it) e la incrocia con ANNCSU: i civici che ANNCSU ha senza coordinate prendono quelle regionali, con l'odonimo di ANNCSU, e si aggiungono i civici che mancano sulle vie che ANNCSU conosce. I civici utilizzabili passano da circa 230.000 a oltre 460.000.</li><li>Se hai gi&agrave; il Friuli-Venezia Giulia in locale, effettua di nuovo il download: il pulsante <b>Aggiorna</b> si accende di verde, oppure usa il bottone della notifica nella campanella.</li><li><b>Avvisi dell'autore nella campanella</b>: comunicazioni brevi per gli editor, anche solo per chi lavora in una certa regione, senza dover aspettare una nuova versione.</li><li>Un grazie a <b>Luca74ts</b>, che ha suggerito l'integrazione!</li></ul>"
+    }
+  },
+  {
     "version": "1.0.0",
     "date": "2026-10-30",
     "changes": {

@@ -56,6 +56,11 @@ si riaprono anche cliccando il numero di versione nel pannello. Gli avvisi passa
 [WME Alert System](https://greasyfork.org/scripts/602363), la libreria condivisa con altri script
 WME: le notifiche non si accavallano e WME e WME beta le condividono.
 
+**Avvisi dell'autore.** Dalla 1.1.0 nella campanella possono arrivare anche brevi comunicazioni
+dell'autore agli editor, a tutti o solo a chi ha in locale una certa regione. Ogni avviso compare
+una volta sola. Lo script li legge dal file [`avvisi.json`](avvisi.json) del repo (vedi
+[Come mandare un avviso](#come-mandare-un-avviso-agli-editor)).
+
 **Nuovi dati ANNCSU.** Una volta al giorno lo script guarda se ANNCSU ha pubblicato un dataset più
 recente per le regioni che hai già in locale. Non effettua il download dei dati: legge solo la data nel nome del file
 pubblicato (pochi byte). Se una regione è più vecchia, nella campanella arriva la notifica con il
@@ -144,6 +149,28 @@ un promemoria: **lo script non riscarica mai da solo**.
 colonna sbagliata (un progressivo, un codice interno) e il pannello ti avvisa in arancione. Stesso
 avviso se la cache proviene da una versione precedente dello script, nel qual caso gli esponenti
 possono mancare: basta ripremere *Scarica regione* per rigenerarla.
+
+### Friuli-Venezia Giulia: i civici della Regione
+
+In Friuli-Venezia Giulia ANNCSU ha le coordinate solo per circa **4 civici su 10** (in 131 comuni su
+215 per nessuno). Per questa regione, dopo il download ANNCSU, lo script scarica anche la numerazione
+civica georiferita della Regione dal portale [dati.friuliveneziagiulia.it](https://www.dati.friuliveneziagiulia.it/)
+(dataset *Numeri Civici Ascot* e *Numeri Civici Non ASCOT*) e la incrocia con ANNCSU civico per civico:
+
+| Caso | Cosa succede |
+|---|---|
+| civico già in ANNCSU con coordinate | resta quello di ANNCSU |
+| civico in ANNCSU senza coordinate | prende le coordinate regionali e tiene l'odonimo di ANNCSU |
+| civico assente da ANNCSU, su una via che ANNCSU ha in quel comune | si aggiunge, con l'odonimo di ANNCSU |
+| via che ANNCSU non ha, nome ambiguo | si scarta: meglio un civico in meno che un odonimo non confermato |
+
+Il confronto riconosce le grafie diverse della stessa via (*Via G. Verdi* e *Via Giuseppe Verdi*,
+*Via I Maggio* e *Via Primo Maggio*, *Fraz. Prato* e *Frazione Prato*). Risultato: i civici
+utilizzabili in FVG passano da circa **230.000 a oltre 460.000**. Il download della regione dura
+qualche decina di secondi in più. Se il portale regionale non risponde, il FVG resta con i soli
+civici ANNCSU e il pulsante *Aggiorna* si accende per riprovare.
+
+L'integrazione l'ha suggerita **Luca74ts**: grazie!
 
 **Elenco comuni.** I codici Belfiore vengono tradotti in nomi di comune con l'elenco ISTAT di
 `data/comuni.json`, che Tampermonkey scarica insieme allo script: funziona anche offline.
@@ -705,6 +732,49 @@ Se il problema resta, segnalalo all'autore con il messaggio che hai visto e il p
 
 ---
 
+## Come mandare un avviso agli editor
+
+*Per chi mantiene lo script.* Per scrivere agli editor non serve pubblicare una versione: basta
+aggiungere una voce a [`avvisi.json`](avvisi.json) e fare il push su `main`. L'avviso compare nella
+campanella del WME al successivo avvio dell'editor (GitHub può metterci qualche minuto a servire il
+file nuovo), una volta sola per ogni editor.
+
+```json
+[
+  {
+    "id": "2026-12-manutenzione",
+    "titolo": "Titolo breve dell'avviso",
+    "testo": "Testo dell'avviso.\n\nUna riga vuota separa i paragrafi.",
+    "regioni": ["Friuli-Venezia Giulia", "Puglia"],
+    "scade": "2027-01-31",
+    "link": { "testo": "Apri la pagina", "url": "https://esempio.it/pagina" }
+  }
+]
+```
+
+| Campo | Obbligatorio | A cosa serve |
+|---|:--:|---|
+| `id` | sì | Nome unico dell'avviso. Lo script lo usa per non mostrarlo due volte: **se lo cambi, l'avviso riparte per tutti** |
+| `titolo` | sì | Titolo nella campanella (massimo 120 caratteri) |
+| `testo` | sì | Testo semplice, senza HTML (massimo 1500 caratteri). `\n\n` separa i paragrafi |
+| `regioni` | no | L'avviso arriva solo a chi ha in locale almeno una di queste regioni. Si scrivono per nome, come nel menu dello script. Senza questo campo arriva a tutti |
+| `download_prima_della_versione` | no | Per dire "effettua di nuovo il download": l'avviso arriva solo a chi ha quelle regioni scaricate con una versione dello script più vecchia di questa (es. `"1.1.0"`), e ha il bottone **Aggiorna** che effettua di nuovo il download. Senza `regioni` vale per tutte le regioni in locale |
+| `dal` / `scade` | no | Date `AAAA-MM-GG`: prima di `dal` e dopo `scade` l'avviso non viene mostrato |
+| `link` | no | Bottone che apre una pagina (`url` deve iniziare con `https://`). Non si usa insieme a `download_prima_della_versione`, che ha già il suo bottone |
+
+Note pratiche:
+
+- Un avviso con `regioni` resta in attesa per chi non ha ancora quella regione: lo riceverà dopo il download.
+- Chi installa lo script più avanti riceve tutti gli avvisi ancora presenti nel file e non scaduti:
+  quando un avviso non serve più, toglilo dal file oppure dagli una data in `scade`.
+- Lo script ne mostra al massimo tre per volta; nella campanella restano 15 giorni.
+- Il file è pubblico, come tutto il repo.
+- A ogni modifica una Action controlla che il file sia scritto bene: se c'è un errore GitHub ti
+  avvisa per email e indica l'avviso da correggere. Finché non lo correggi gli editor non ricevono nulla.
+- Gli avvisi arrivano solo a chi ha lo script dalla versione 1.1.0 in poi.
+
+---
+
 ## Licenza
 
 Copyright © 2026 **Francesco Conforti** (checcoconf).
@@ -717,7 +787,10 @@ Il nome *WME Fonti Stradali IT* identifica il progetto originale: le versioni de
 diverso.
 
 Dati: [ANNCSU](https://www.anncsu.gov.it/it/) (Istat / Agenzia delle Entrate), open data con licenza
-[CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.it).
+[CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.it). Per il Friuli-Venezia Giulia anche la
+numerazione civica della Regione Autonoma Friuli Venezia Giulia
+([dati.friuliveneziagiulia.it](https://www.dati.friuliveneziagiulia.it/)), con licenza
+[IODL 2.0](https://www.dati.gov.it/content/italian-open-data-license-v20).
 
 Waze e Waze Map Editor sono marchi di Waze Mobile / Google. Progetto indipendente, non affiliato.
 

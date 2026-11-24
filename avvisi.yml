@@ -1,0 +1,45 @@
+# .github/workflows/avvisi.yml
+# Controlla avvisi.json a ogni modifica. Lo script lo legge dal ramo main e mostra gli avvisi nella
+# campanella del WME: se il file e' scritto male gli editor non vedono niente, e nessuno se ne
+# accorge. Qui invece il controllo fallisce e GitHub ti avvisa per email, con la riga da correggere.
+
+name: Controllo avvisi
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'avvisi.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controlla:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: avvisi.json e' scritto bene?
+        run: |
+          node -e '
+            const voci = JSON.parse(require("fs").readFileSync("avvisi.json", "utf8"));
+            if (!Array.isArray(voci)) throw new Error("avvisi.json deve essere un elenco: [ { ... }, { ... } ]");
+            const data = /^\d{4}-\d{2}-\d{2}$/, visti = new Set();
+            voci.forEach((a, i) => {
+              const dove = "avviso n. " + (i + 1) + (a && a.id ? " (" + a.id + ")" : "");
+              const no = m => { throw new Error(dove + ": " + m); };
+              if (!a || typeof a !== "object") no("non e un oggetto { ... }");
+              for (const c of ["id", "titolo", "testo"]) if (typeof a[c] !== "string" || !a[c].trim()) no("manca \"" + c + "\"");
+              if (visti.has(a.id)) no("id gia usato da un altro avviso: ogni avviso ha il suo");
+              visti.add(a.id);
+              if (a.titolo.length > 120) no("titolo oltre i 120 caratteri");
+              if (a.testo.length > 1500) no("testo oltre i 1500 caratteri");
+              for (const c of ["dal", "scade"]) if (a[c] !== undefined && !data.test(a[c])) no("\"" + c + "\" deve essere una data AAAA-MM-GG");
+              if (a.regioni !== undefined && (!Array.isArray(a.regioni) || a.regioni.some(r => typeof r !== "string"))) no("\"regioni\" deve essere un elenco di nomi, es. [\"Puglia\"]");
+              if (a.download_prima_della_versione !== undefined && !/^\d+(\.\d+)*$/.test(a.download_prima_della_versione)) no("\"download_prima_della_versione\" deve essere un numero di versione, es. \"1.1.0\"");
+              if (a.download_prima_della_versione !== undefined && a.link !== undefined) no("\"link\" e \"download_prima_della_versione\" non vanno insieme: il bottone e uno solo");
+              if (a.link !== undefined && !(a.link && /^https:\/\//.test(a.link.url || ""))) no("\"link\" deve avere un url che inizia con https://");
+            });
+            console.log("avvisi.json: ok, " + voci.length + " avvisi");
+          '
