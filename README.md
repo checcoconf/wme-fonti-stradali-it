@@ -224,7 +224,8 @@ I segmenti catturati compaiono come **chip** sotto il menu:
 - **chip rosso** → su quel segmento l'ultimo *Applica* è fallito;
 - **Aggiungi selezione attuale** → mette in lista i segmenti selezionati nell'editor. Comodo dopo una
   multi-selezione;
-- **Svuota lista** → azzera tutto (risultati e civici sulla mappa si riallineano da soli).
+- **Svuota lista** → azzera tutto (risultati e civici sulla mappa si riallineano da soli). Dopo aver
+  inserito i civici e salvato, la lista si svuota da sola.
 
 ### Le altre opzioni
 
@@ -259,6 +260,10 @@ Per ogni segmento in lista lo script cerca i civici ANNCSU entro il raggio, misu
 **linea del segmento** (non dal centro né dai vertici). Li raggruppa per odonimo e tiene una sola volta
 il civico agganciato da più tronconi della stessa via. Restano al massimo **8 odonimi**, ordinati per
 distanza, ciascuno col suo colore.
+
+Vale **solo quello che hai in lista**: se la via prosegue oltre l'incrocio con un segmento che ha lo
+stesso nome ma non è in lista, i civici più vicini a quel segmento non entrano (né pallini, né
+conteggio, né elenco). Li vedrai quando lavori su quel segmento.
 
 ### Valori consigliati
 
@@ -368,6 +373,12 @@ Una scheda si nasconde quando il suo odonimo è il nome di un segmento caricato 
 lista, che **non può essere la tua stessa strada**. Non si nasconde mai se quel nome sta anche su un segmento
 che **prosegue dritto** quello in lista o gli corre **parallelo** (doppia carreggiata): è proprio il caso in
 cui quel nome può servirti, per esempio per dare il nome a un troncone *senza strada*.
+
+Si nasconde anche quando il nome su Waze non aiuta (la traversa su Waze si chiama in un altro modo, o
+l'odonimo non ha segmenti lì): se una scheda corrisponde già alla tua via, gli **altri odonimi** restano
+in vista solo quando occupano un lato intero della strada in lista (vedi *L'altro lato intestato a
+un'altra via*). Due numeri all'angolo o uno in fondo alla via sono la via accanto e finiscono nella
+riga degli ignorati.
 
 Sotto la casella possono comparire:
 
@@ -553,6 +564,41 @@ Se lo stesso numero esiste già come **civico normale** su questa via a più di 
 l'RPP e te lo dice: Waze lo rifiuterebbe al salvataggio con *numero civico non valido*. Prima elimina o
 sposta quel civico.
 
+### L'altro lato intestato a un'altra via: tutta la scheda a RPP
+
+Capita che lungo la strada in lista ci siano i civici di **due odonimi**: un lato è della via che su
+Waze dà il nome al segmento, l'altro è intestato a un'altra via che su Waze non ha segmenti lì. Un
+civico vale per la via del suo segmento, quindi quelli dell'altro odonimo **non si possono inserire
+come civici**: vanno fatti come luoghi residenziali.
+
+Lo script lo riconosce da solo, guardando dove stanno i civici e non solo i nomi. Una scheda resta in
+vista con il pulsante **+N RPP su Waze** (e una nota che lo spiega) quando:
+
+- un'altra scheda corrisponde al nome dei segmenti in lista, e questa no;
+- il suo odonimo non è una via vicina che su Waze esiste già;
+- almeno **3 dei suoi civici**, e la maggior parte, stanno lungo la strada in lista **dal lato in cui
+  la via in lista non ha civici suoi**. I civici più vicini a un'altra strada non contano: sono della
+  via accanto.
+
+Non basta quindi che un civico di un'altra via cada nel raggio: se la via in lista ha già i suoi numeri
+su tutti e due i lati, o gli altri sono solo due all'angolo, la scheda finisce fra le vie vicine
+ignorate (con *mostra* la rivedi, e se serve davvero la fai comunque a RPP).
+
+L'elenco di controllo è lo stesso (spunte, numero modificabile, Street View, *Metti i civici in fila*),
+ma il pulsante in fondo è **Crea N RPP**: dopo una sola conferma nasce un luogo residenziale per ogni
+civico spuntato, con
+
+- il **Place** nel punto del civico (quello ANNCSU, o dove l'hai portato mettendoli in fila);
+- come **indirizzo** la via scritta nella casella della scheda, con la città, e il numero;
+- il **punto di arrivo** sul segmento in lista più vicino, con il nome di quella strada; un civico
+  d'angolo nettamente più vicino a una traversa lo prende su quella.
+
+I numeri che esistono già come RPP con lo stesso indirizzo arrivano senza spunta. Qui il limite dei
+45 m non vale e non c'è *Aggiungi al centro mappa*. Poi controlli e **salvi tu**.
+
+Se invece nessuna scheda corrisponde al nome su Waze, resta l'avviso rosso: prima va sistemato il nome
+della strada, poi i civici.
+
 ### Come vengono trovati i civici già presenti
 
 Sotto la legenda una riga dice **su quanti civici già su Waze è stato fatto il confronto**.
@@ -678,6 +724,36 @@ controllare, quindi:
 La barra sopra la lista li **mostra** (predefinito) o li **nasconde** tutti insieme; la scelta resta
 salvata fra le sessioni.
 
+### Mettere i civici in fila
+
+I punti ANNCSU sono quasi sempre giusti, ma stanno spesso a zig-zag oppure troppo vicini alla
+strada. In testa all'elenco, il pulsante **Metti i civici in fila** li allinea con un clic senza stravolgerli: ogni
+civico spuntato resta **dal suo lato della strada e davanti al suo edificio**, e cambia solo la
+distanza dal segmento, che diventa la stessa per tutta la fila: quella a cui sta già la maggior
+parte dei suoi civici. Lo script **non li allontana** di sua iniziativa: se e quanto spostarli, per
+esempio per portarli sopra le case, lo decidi tu con le frecce. Vale anche sulle vie ad angolo e in
+curva: la fila segue la strada.
+
+- **Due file.** Pari e dispari sono due file distinte, così come li dà ANNCSU; se la via ha i numeri
+  in sequenza o tutti pari sui due lati, le file sono i due lati della strada. Ogni fila porta il
+  nome dei suoi numeri (*Dispari 109–121*, *Pari 10–20*) e ha i suoi comandi. Un pari che ANNCSU
+  mette sul segmento, anche di poco dalla parte dei dispari, resta con i pari; un civico che sta
+  chiaramente dall'altra parte della strada resta dov'è. Lo script non unisce mai le file da solo:
+  togliendo la spunta *Due file separate* li porti tutti su una fila sola (*Tutti i civici*).
+- **Frecce.** Ogni fila ha quattro frecce, che puntano nella direzione in cui i pallini si muovono
+  sulla mappa: le prime due la portano più lontano o più vicino alla strada (per esempio più a nord
+  o più a sud), le altre due la fanno scorrere lungo la via. Un clic = 1 metro; tenendo premuto la
+  fila continua a muoversi.
+- **Distanza fra i civici.** I pulsanti *−* e *+* stringono o allargano la fila intorno al suo
+  centro. Di solito non servono.
+
+Accanto al nome di ogni fila leggi quanti civici contiene e dove sta (*7 civici · 18 m a nord della
+strada*). Si muovono solo i **civici spuntati**: quelli senza spunta e quelli aggiunti a mano
+restano dove sono. I pallini sulla mappa si spostano subito, così vedi dove finiranno i civici prima
+di premere *Inserisci*. La fila si ferma a 44 m dalla strada (oltre i 45 Waze rifiuta i civici) e ai
+capi della via. *Rimetti come in ANNCSU* annulla tutto; chiuso l'elenco i pallini tornano sul punto
+ANNCSU, ma le file restano impostate per quella via finché non riparte il confronto.
+
 ### Aggiungere un civico letto su Street View
 
 Con **+ Aggiungi al centro mappa**: centra la mappa sul portone, scrivi il numero (es. `18/B`, o qualsiasi
@@ -691,6 +767,11 @@ hai spuntato lo stesso numero in più punti lo script ti avvisa: Waze ne accetta
 Se hai spuntato a mano un numero già fatto come RPP o con l'accesso su un'altra via, prima di inserire
 ti chiede conferma.
 Al termine arriva un riepilogo con inseriti, saltati e motivi dei rifiuti. **Poi salva.**
+
+Dopo il salvataggio la **lista dei segmenti si svuota da sola** (vale anche per gli RPP creati da una
+scheda): su quella strada il lavoro è finito. Se la strada ha un lato da fare a civici e uno a RPP,
+falli tutti e due prima di salvare: prima i civici, perché il WME non li accetta con modifiche non
+salvate, poi gli RPP. Se annulli tutto prima di salvare, la lista resta.
 
 ---
 

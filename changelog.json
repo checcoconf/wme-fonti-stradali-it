@@ -1,5 +1,12 @@
 [
   {
+    "version": "1.2.0",
+    "date": "2026-11-28",
+    "changes": {
+      "it": "<ul><li><b>Metti i civici in fila.</b> I punti ANNCSU sono quasi sempre giusti, ma stanno spesso a zig-zag o troppo vicini alla strada. In testa all'elenco dei civici, il nuovo pulsante <i>Metti i civici in fila</i> li allinea con un clic: ogni civico resta dal suo lato della strada e davanti al suo edificio, e cambia solo la distanza dal segmento, che diventa la stessa per tutta la fila. Lo script non li allontana di sua iniziativa: se e quanto spostarli lo decidi tu con le frecce. Funziona anche sulle vie ad angolo e in curva.</li><li><b>Due file.</b> Pari e dispari sono due file distinte, cos&igrave; come li d&agrave; ANNCSU (oppure i due lati della strada, se i numeri sono in sequenza), ognuna con le sue frecce: lo script non le unisce mai da solo. Un pari che ANNCSU mette sul segmento resta con i pari.</li><li><b>Frecce come sulla mappa</b>: spostano la fila nella direzione che indicano, pi&ugrave; lontano o pi&ugrave; vicino alla strada oppure lungo la via. Tenendole premute la fila continua a muoversi. In pi&ugrave;, <i>&minus;</i> e <i>+</i> per stringere o allargare la distanza fra i civici.</li><li>Sulla mappa vedi subito dove finiranno i civici, prima di premere <i>Inserisci</i>. <i>Rimetti come in ANNCSU</i> annulla tutto. La fila si ferma sotto i 45 m dalla strada, oltre i quali Waze rifiuta i civici.</li><li><b>L'altro lato intestato a un'altra via.</b> Quando un lato della strada in lista porta i civici di un altro odonimo (almeno 3, dal lato in cui la via in lista non ha numeri suoi), la loro scheda propone <i>+N RPP su Waze</i>: stesso elenco di controllo, ma i civici nascono come luoghi residenziali, con quell'odonimo come indirizzo e il punto di arrivo sulla strada in lista, col suo nome.</li><li><b>Solo i civici dei segmenti in lista.</b> Se la via prosegue con un segmento che non hai catturato, i civici di quel tratto non compaiono pi&ugrave;. E le vie accanto entrate nel raggio (la traversa all'angolo, la piazza in fondo) si nascondono anche quando su Waze hanno un altro nome: restano nella riga <i>Ignorati&hellip; mostra</i>.</li><li><b>Lista svuotata da sola.</b> Dopo aver inserito i civici e salvato, la lista dei segmenti si svuota senza premere <i>Svuota lista</i>.</li></ul>"
+    }
+  },
+  {
     "version": "1.1.1",
     "date": "2026-11-24",
     "changes": {

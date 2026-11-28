@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME Fonti Stradali IT
 // @namespace    wme-fonti-it
-// @version      1.1.1
+// @version      1.2.0
 // @description  Confronta i segmenti del WME con i civici ufficiali ANNCSU (Istat/Agenzia Entrate): evidenzia i segmenti in lista, mostra i civici sulla mappa e compila nome via/contrada, localita, comune e numeri civici. A cura di checcoconf.
 // @author       Francesco Conforti (checcoconf)
 // @copyright    2026 Francesco Conforti
@@ -182,7 +182,8 @@
     // Civici inseriti dallo script in questa sessione: finche' non salvi, il WME puo' non
     // restituirli, e senza questa memoria tornerebbero nell'elenco come se mancassero.
     let civiciInseriti = [];
-    let lastPtsByG = new Map();       // gid -> [{lon,lat,label,d}] civici agganciati (deduplicati)
+    let listaDaSvuotare = false;      // civici inseriti dallo script: al prossimo salvataggio riuscito la lista si svuota
+    let lastPtsByG = new Map();       // gid -> [{lon,lat,label,d,altrove}] civici agganciati (deduplicati)
     let lastDotFeatures = [];         // ultimi civici disegnati sulla mappa
     const dotIndex = new Map();       // id della feature -> { g, p }: serve al clic sul pallino
     let lastDupCount = 0;             // doppioni civici scartati nell'ultimo confronto
@@ -688,7 +689,7 @@
             try { sdk.Events.on({ eventName, eventHandler }); agganciati++; }
             catch (e) { log('evento', eventName, 'non disponibile', e); }
         };
-        on('wme-save-finished', p => { onSaveEvent(p); if (!p || p.success !== false) aggiornaRisultati(1500); });
+        on('wme-save-finished', p => { onSaveEvent(p); if ((!p || p.success !== false) && !svuotaListaSalvata()) aggiornaRisultati(1500); });
         on('wme-after-undo', () => { lastUndoAt = Date.now(); aggiornaRisultati(); });
         on('wme-no-edits', onNoEdits);
         const n = unsavedCount();
@@ -720,7 +721,7 @@
         if (n != null) {
             if (lastUnsaved > 0 && n === 0) {
                 if (Date.now() - lastUndoAt < 4000) scartaPending();
-                else promuoviPending('', 'contatore modifiche');
+                else { promuoviPending('', 'contatore modifiche'); svuotaListaSalvata(); }
             }
             lastUnsaved = n;
         }
@@ -755,7 +756,18 @@
     // Niente piu' da salvare subito dopo un annullamento: hai annullato tutto, e le righe
     // di quelle modifiche non devono finire nel registro.
     function onNoEdits() {
-        if (pendingLog.length && Date.now() - lastUndoAt < 4000) scartaPending();
+        if (Date.now() - lastUndoAt >= 4000) return;
+        listaDaSvuotare = false;
+        if (pendingLog.length) scartaPending();
+    }
+
+    // Civici inseriti e salvati: su quei segmenti il lavoro e' finito, la lista si svuota da sola.
+    // Ritorna true se l'ha svuotata.
+    function svuotaListaSalvata() {
+        if (!listaDaSvuotare || !captured.size) { listaDaSvuotare = false; return false; }
+        svuotaLista();
+        toast('Civici salvati: ho svuotato la lista dei segmenti.', 6000);
+        return true;
     }
 
     function promuoviPending(nota, come) {
@@ -1676,6 +1688,15 @@
 #wfit-panel .wfit-hnnum { width:70px; min-width:56px; padding:2px 5px; border:1px solid #bbb; border-radius:5px; font-weight:650; font-size:12px; }
 #wfit-panel .wfit-hnnum:focus { border-color:var(--blu); outline:none; }
 #wfit-panel .wfit-hnnum.wfit-bad-in { border-color:#c33; background:#fdeaea; }
+#wfit-panel .wfit-sposta { margin:6px 0 2px; }
+#wfit-panel button.wfit-sp-apri { display:block; width:100%; border-color:#0a4fc0; background:#eef4ff; color:#0a4fc0; font-weight:600; }
+#wfit-panel .wfit-sp-corpo { margin-top:5px; padding:6px 8px 7px; border:1px solid #e3e3e3; border-radius:7px; background:#fafafa; }
+#wfit-panel .wfit-sp-due { display:block; margin:0 0 4px; font-weight:normal; }
+#wfit-panel .wfit-sp-fila { margin:6px 0; }
+#wfit-panel .wfit-sp-tasti { display:flex; gap:4px; flex-wrap:wrap; align-items:center; margin-top:3px; }
+#wfit-panel .wfit-sp-tasti .wfit-btn { min-width:32px; padding:4px 7px; font-size:13px; line-height:1.2; touch-action:none; user-select:none; }
+#wfit-panel .wfit-sp-tasti .wfit-sp-stacco { margin-left:10px; }
+#wfit-panel .wfit-sp-nota { margin:5px 0; }
 #wfit-panel .wfit-hnadd { display:flex; gap:5px; margin-top:5px; align-items:center; }
 #wfit-panel .wfit-hnadd input { flex:1; padding:4px 6px; border:1px solid #bbb; border-radius:6px; font-size:12px; }
 #wfit-panel .wfit-actions .wfit-btn { flex:1 1 auto; white-space:nowrap; }
@@ -1798,7 +1819,7 @@
     <p><span class="wfit-gnum">2b &middot; Il tuo tasto.</span> Se ALT ti sta scomodo, scegli <b>Un tasto a tua scelta</b> nel menu <b>Cattura</b>: compare un riquadro rosso con scritto <b>"cliccami per attivare l'ascolto del tasto"</b>. Cliccalo e premi <b>un solo tasto</b> della tastiera (uno soltanto: per ALT, MAIUSC e CTRL ci sono gi&agrave; le voci fisse del menu). Il tasto letto ti viene mostrato in attesa di conferma: <b>Conferma</b> lo salva, <b>Rifai</b> riapre l'ascolto per sceglierne un altro, ESC annulla. Da quel momento tieni premuto quel tasto e clicchi il segmento: <b>resta salvato</b> anche alle prossime sessioni. Mentre lo tieni premuto lo script blocca l'eventuale scorciatoia del WME sullo stesso tasto, cos&igrave; non fa danni: scegline comunque uno che non usi spesso, perch&eacute; i tasti singoli sono la fascia che WME, Toolbox e gli altri script si contendono. <b>Azzera</b> lo cancella e riporta tutto ad ALT + clic, che resta la scelta predefinita.</p>
     <p><span class="wfit-gnum">3 &middot; Confronta con ANNCSU.</span> Il confronto parte da solo a ogni cattura (il pulsante serve a ripeterlo, per esempio dopo aver cambiato il raggio): entro il <b>Raggio</b> scelto compaiono fino a 8 odonimi ordinati per distanza, ognuno col suo colore, con comune, localit&agrave;/contrada e numero di civici distinti. Il raggio va da <b>1 a 50 m</b> (predefinito 10): oltre i 45 m Waze rifiuta i civici, quindi un raggio pi&ugrave; largo non servirebbe. Consigliati <b>~10 m</b> in paese e in citt&agrave; (segmenti corti, vie parallele vicine) e <b>20&ndash;30 m</b> fuori dal centro abitato e nelle contrade (segmenti lunghi, edifici arretrati). Parti stretto e allarga poco per volta.</p>
     <p><span class="wfit-gnum">4 &middot; Applica i nomi.</span> Se i segmenti in lista su Waze hanno un <b>nome diverso</b> dall&#39;odonimo ANNCSU, la scheda lo dice con un <b>avviso rosso</b> (su Waze / ANNCSU a confronto) e prima di applicare ti chiede conferma; un nome solo <b>simile</b> (abbreviato, senza nome di battesimo) ha un avviso arancione. Il nome &egrave; in una <b>casella modificabile</b>: correggilo secondo le linee guida (per "Strada Contrada&hellip;" c'&egrave; il link rapido "usa Contrada&hellip;") e lo script <b>impara la tua regola</b>, precompilando cos&igrave; le prossime caselle. Scegli la modalit&agrave;: <b>Dentro il centro abitato</b> (PN con citt&agrave;) o <b>Fuori dal centro abitato</b> (regola IT: PN senza citt&agrave; + AN con citt&agrave;). "Applica ai segmenti" tocca <b>solo ci&ograve; che differisce</b>, preserva gli alternativi esistenti e dopo ogni scrittura <b>verifica</b> che il WME abbia registrato davvero; se trova alternativi non conformi te li elenca e li rimuove <b>solo se confermi</b>. I segmenti fuori vista vengono recuperati spostando la mappa. Poi <b>salva</b>.</p>
-    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il pulsante con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato <b>numero/esponente maiuscolo</b>: <b>343/A</b>, <b>12/BIS</b> (anche TER e QUATER); se scrivi <b>75a</b> o <b>75 a</b> diventa <b>75/A</b>. Waze ora accetta qualsiasi formato: quelli insoliti (<b>20/1</b>) restano in lista <b>senza spunta</b>, col bordo ambra <b>da verificare</b>: se sul posto sono giusti li spunti tu e vengono inseriti. A <b>Genova, Savona e Firenze</b> lo script legge anche la numerazione <b>rossa e nera</b> (campo SPECIFICITA di ANNCSU): i neri restano come ovunque (<b>4, 4/A</b>, anche <b>3/R</b>), i rossi prendono la R (<b>3R, 3R/A</b>); in elenco vengono prima i neri e poi i rossi, e lato e sequenza si controllano separatamente per le due numerazioni. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il pulsante <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso, che prende il nome della via su cui si affaccia. Ogni civico sta su <b>una riga sola</b> (spunta, numero, distanza, Street View): lo stato lo dice il colore del bordo, spiegato nella legenda sopra l'elenco; se il pannello &egrave; largo compare anche una nota corta, e passando il mouse sulla riga leggi la spiegazione completa. Anche <b>fuori dal centro abitato</b> si inseriscono civici normali: li rende ricercabili il nome alternativo con la citt&agrave;. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
+    <p><span class="wfit-gnum">5 &middot; Numeri civici.</span> Dopo il salvataggio, <b>+N civici su Waze</b> apre l'<b>elenco di controllo</b>: clic sulla riga e la mappa si centra sul civico, il pulsante con l'occhio apre <b>Street View</b>. Il numero &egrave; gi&agrave; nel formato <b>numero/esponente maiuscolo</b>: <b>343/A</b>, <b>12/BIS</b> (anche TER e QUATER); se scrivi <b>75a</b> o <b>75 a</b> diventa <b>75/A</b>. Waze ora accetta qualsiasi formato: quelli insoliti (<b>20/1</b>) restano in lista <b>senza spunta</b>, col bordo ambra <b>da verificare</b>: se sul posto sono giusti li spunti tu e vengono inseriti. A <b>Genova, Savona e Firenze</b> lo script legge anche la numerazione <b>rossa e nera</b> (campo SPECIFICITA di ANNCSU): i neri restano come ovunque (<b>4, 4/A</b>, anche <b>3/R</b>), i rossi prendono la R (<b>3R, 3R/A</b>); in elenco vengono prima i neri e poi i rossi, e lato e sequenza si controllano separatamente per le due numerazioni. Arrivano senza spunta anche: i civici <b>gi&agrave; su Waze</b> (mai reinseriti, nemmeno spuntandoli a mano), quelli oltre <b>45 m</b> dalla strada, quelli con <b>lato o sequenza insoliti</b>, e quelli il cui <b>accesso &egrave; su un'altra via</b>: per questi ultimi il pulsante <b>RPP</b> crea un luogo residenziale con via, civico e punto di arrivo sull'ingresso, che prende il nome della via su cui si affaccia. Se un lato della strada in lista porta i civici di <b>un altro odonimo</b> (un lato intestato a un'altra via), la loro scheda ha il pulsante <b>+N RPP su Waze</b>: l'elenco &egrave; lo stesso, ma nascono tutti come luoghi residenziali, con quell'odonimo come indirizzo e il punto di arrivo sulla strada in lista. Dopo il salvataggio dei civici la <b>lista dei segmenti si svuota da sola</b>. In testa all'elenco, il pulsante <b>Metti i civici in fila</b> raddrizza i civici spuntati: ognuno resta <b>dal suo lato della strada</b> e davanti al suo edificio, tutti alla stessa distanza dal segmento. Ogni lato &egrave; una fila con le sue frecce, per portarla pi&ugrave; lontano o pi&ugrave; vicino alla strada (o lungo la via): sulla mappa vedi subito dove finiranno. Ogni civico sta su <b>una riga sola</b> (spunta, numero, distanza, Street View): lo stato lo dice il colore del bordo, spiegato nella legenda sopra l'elenco; se il pannello &egrave; largo compare anche una nota corta, e passando il mouse sulla riga leggi la spiegazione completa. Anche <b>fuori dal centro abitato</b> si inseriscono civici normali: li rende ricercabili il nome alternativo con la citt&agrave;. Ogni civico viene agganciato al segmento della sua via, e il confronto coi civici gi&agrave; presenti vale solo su ci&ograve; che l'editor ha caricato: lavora per <b>tratti brevi</b>, da vicino.</p>
     <p><span class="wfit-gnum">6 &middot; Se qualcosa viene rifiutato.</span> Lo script non pu&ograve; lavorare dove non puoi lavorare tu: se un segmento &egrave; <b>bloccato sopra il tuo livello</b> o comunque non hai i permessi per modificarlo, l'inserimento fallisce e il riepilogo te lo dice &mdash; in quel caso <b>chiedi lo sblocco (unlock) alla community</b> prima di riprovare. Gli altri casi: <b>"strada senza nome"</b> &rarr; dai prima il nome alla strada (puoi catturarla con lo script); <b>"gi&agrave; su Waze"</b> &rarr; il civico esiste gi&agrave; e non viene reinserito; <b>"gi&agrave; su Waze ma posizionato male"</b> &rarr; il numero c'&egrave; gi&agrave; su questa strada in un altro punto: trascina quello esistente sul punto giusto, non aggiungerne un altro. Negli errori del salvataggio WME: "gi&agrave; esistente" &rarr; elimina il doppione; "lato errato" o "fuori sequenza" &rarr; ricontrolla i punti e, se sono corretti sul territorio, usa <b>Salva &rarr; Forza</b>; "troppo lontano dal segmento" &rarr; piazzalo a mano vicino alla strada e trascinalo sul punto reale.</p>
     <p class="wfit-key"><span class="wfit-gnum">7 &middot; La regola pi&ugrave; importante.</span> Questo script <b>non sostituisce il lavoro umano di noi editor: lo facilita</b>. Ogni modifica apportata va controllata con i <b>cartelli stradali</b> e i <b>numeri civici reali</b> dove presenti, con la <b>conoscenza del territorio</b> da parte dell'editor e con <b>buon senso civico</b> nell'utilizzo. Lo strumento propone: la responsabilit&agrave; di ci&ograve; che finisce sulla mappa resta di chi salva.</p>
     <div class="wfit-muted">Lo script modifica solo ci&ograve; che differisce e salta ci&ograve; che &egrave; gi&agrave; a posto: <b>rivedi comunque sempre l'elenco modifiche prima di salvare</b>.</div>
@@ -1911,7 +1932,7 @@
             suppressUntil = Date.now() + 800;
             clearWmeSelection();
         });
-        ui.clearCap.addEventListener('click', () => { captured.clear(); lastFailedIds.clear(); updateCapturedUI(); clearResultsUI(); });
+        ui.clearCap.addEventListener('click', svuotaLista);
         ui.analizza.addEventListener('click', analyze);
     }
 
@@ -3731,6 +3752,8 @@
         if (ui.results) ui.results.innerHTML = 'Lista vuota: cattura qualche segmento per vedere qui odonimi e civici.';
     }
 
+    function svuotaLista() { listaDaSvuotare = false; captured.clear(); lastFailedIds.clear(); updateCapturedUI(); clearResultsUI(); }
+
     function updateCapturedUI() {
         if (!ui.selinfo) return;
         if (!captured.size) {
@@ -4031,11 +4054,44 @@
     /* Analisi automatica: segmenti vs civici                              */
     /* ------------------------------------------------------------------ */
 
+    // Strade caricate nell'editor che NON sono in lista, vicine a quelle in lista: servono a capire
+    // di chi e' un civico. continuo = segmenti con lo stesso nome di uno in lista (la via prosegue
+    // oltre quello che hai catturato), altre = vie con un altro nome. Geometrie in metri (vedi
+    // projectPolyline); kx converte la longitudine.
+    function stradeFuoriLista(ids, segs, raggio) {
+        let minLon = 999, minLat = 999, maxLon = -999, maxLat = -999;
+        for (const c of segs) for (const q of c) {
+            minLon = Math.min(minLon, q[0]); maxLon = Math.max(maxLon, q[0]);
+            minLat = Math.min(minLat, q[1]); maxLat = Math.max(maxLat, q[1]);
+        }
+        const cosLat = Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
+        const out = { kx: M_PER_DEG * cosLat, continuo: [], altre: [] };
+        const dLon = (raggio + 30) / out.kx, dLat = (raggio + 30) / M_PER_DEG;
+        const inLista = new Set(ids.map(String)), nomi = new Set();
+        const nomeDi = sg => (sg && sg.primaryStreetId != null ? chiaveNome(streetNameById(sg.primaryStreetId)) : '');
+        let all = [];
+        try {
+            for (const id of ids) { const k = nomeDi(sdk.DataModel.Segments.getById({ segmentId: Number(id) })); if (k) nomi.add(k); }
+            all = sdk.DataModel.Segments.getAll() || [];
+        } catch { return out; }
+        for (const sg of all) {
+            const c = sg && sg.geometry && sg.geometry.coordinates;
+            if (!c || c.length < 2 || inLista.has(String(sg.id)) || sg.isDrivable === false || sg.roadType === RT_RAMP) continue;
+            if (!c.some(q => q[0] >= minLon - dLon && q[0] <= maxLon + dLon && q[1] >= minLat - dLat && q[1] <= maxLat + dLat)) continue;
+            const k = nomeDi(sg);
+            if (k) (nomi.has(k) ? out.continuo : out.altre).push(projectPolyline(c, cosLat));
+        }
+        return out;
+    }
+    const distDalle = (strade, x, y) => strade.reduce((m, pr) => Math.min(m, distToProjected(x, y, pr)), Infinity);
+
     function analyze() {
         mostraVieVicine = false;   // ogni nuovo confronto riparte con le vie vicine nascoste
         let segs = [...captured.values()].map(v => v.coords);
+        let ids = [...captured.keys()];
         if (!segs.length) {
-            segs = getSelectedSegmentIds().map(id => segGeometry(id)).filter(c => c && c.length);
+            ids = getSelectedSegmentIds();
+            segs = ids.map(id => segGeometry(id)).filter(c => c && c.length);
         }
         if (!segs.length) { toast('Clicca prima qualche segmento sulla mappa.'); return; }
         if (!mem.n) { toast('Prima scarica i dati della regione.'); return; }
@@ -4047,6 +4103,7 @@
         // spezzata in tronconi, le due carreggiate di un viale, una laterale catturata insieme).
         // E' sempre lo stesso civico: lo teniamo una volta sola, con la distanza minima trovata.
         const ptBest = new Map(); // indice record -> {i, g, d}
+        const fuori = stradeFuoriLista(ids, segs, radius);
 
         for (const coords of segs) {
             let minLon = 999, minLat = 999, maxLon = -999, maxLat = -999;
@@ -4064,6 +4121,9 @@
             gridForEachInBBox(minLon - dLon, minLat - dLat, maxLon + dLon, maxLat + dLat, i => {
                 const d = distToProjected(mem.lons[i] * kx, mem.lats[i] * M_PER_DEG, proj);
                 if (d > radius) return;
+                // piu' vicino al troncone accanto della stessa via, che non e' in lista: e' un civico
+                // di quel segmento, lo vedrai quando lavori su quello
+                if (distDalle(fuori.continuo, mem.lons[i] * fuori.kx, mem.lats[i] * M_PER_DEG) + 0.5 < d) return;
                 const g = mem.gids[i];
                 let r = results.get(g);
                 if (!r) { r = { dist: d, count: 0, uniq: new Set() }; results.set(g, r); }
@@ -4126,7 +4186,9 @@
             }
             let a = lastPtsByG.get(p.g);
             if (!a) { a = []; lastPtsByG.set(p.g, a); }
-            a.push({ lon, lat, label, d: p.d, dup: rep > 0, rep: rep + 1, twinD, nr: numRossaG(p.g) });
+            // altrove: sta piu' vicino a un'altra via (non in lista) che ai segmenti in lista
+            a.push({ lon, lat, label, d: p.d, dup: rep > 0, rep: rep + 1, twinD, nr: numRossaG(p.g),
+                altrove: distDalle(fuori.altre, lon * fuori.kx, lat * M_PER_DEG) + 2 < p.d });
         }
         if (lastDupCount) {
             log(`numeri civici ripetuti nel match (mostrati comunque): ${lastDupCount}`);
@@ -4148,15 +4210,14 @@
     // dell'elenco di controllo mostrano sempre esattamente le stesse cose.
     function drawCivici() {
         dotIndex.clear();
-        // le vie vicine non in lista (schede nascoste) non disegnano i loro civici
-        const colorOf = new Map(lastResults.filter(r => !r.nascosta).map(r => [r.g, r.color]));
         const sz = dotSize();
         const features = [];
         let n = 0;
-        for (const [g, arr] of lastPtsByG) {
-            const color = colorOf.get(g);
-            if (!color) continue;
-            for (const p of arr) {
+        for (const r of lastResults) {
+            // le vie vicine non in lista (schede nascoste) non disegnano i loro civici
+            if (r.nascosta || !r.color) continue;
+            const g = r.g, color = r.color;
+            for (const p of civiciDi(r)) {
                 const fid = 'wfit-' + g + '-' + (n++);
                 dotIndex.set(fid, { g, p });
                 features.push({
@@ -4742,14 +4803,17 @@
     // Avviso da mettere in testa alla scheda quando l'odonimo non corrisponde a Waze.
     // grave = rosso (nome davvero diverso); non grave = arancione (nome simile, es. abbreviato)
     // o nota grigia (scheda di una via vicina, mentre un'altra scheda corrisponde).
-    function avvisoOdonimo(cfr, odonimo, qualcunaCorrisponde, nLista) {
+    function avvisoOdonimo(cfr, odonimo, qualcunaCorrisponde, nLista, comeRpp) {
         if (!cfr.diversi) return null;
         const el = document.createElement('div');
         const suWaze = cfr.altri.slice(0, 3).map(a => `\u00ab${escapeHtml(a.nome)}\u00bb${cfr.altri.length > 1 || a.n > 1 ? ` (${a.n})` : ''}`).join(', ')
             + (cfr.altri.length > 3 ? ', \u2026' : '');
         if (!cfr.corrisponde && qualcunaCorrisponde) {
             el.className = 'wfit-muted wfit-odo-vicina';
-            el.textContent = 'Nessun segmento in lista si chiama cos\u00ec su Waze: probabilmente \u00e8 una via vicina entrata nel raggio.';
+            el.textContent = comeRpp
+                ? 'Nessun segmento in lista si chiama cos\u00ec su Waze. Se questi civici si affacciano sulla strada in lista (l\'altro lato, intestato a un\'altra via) '
+                    + 'non vanno inseriti come civici: il pulsante qui sotto li crea come luoghi residenziali (RPP).'
+                : 'Nessun segmento in lista si chiama cos\u00ec su Waze e questi civici sono pi\u00f9 vicini a un\'altra strada: sono di una via accanto, non riguardano i segmenti che hai catturato.';
             return { el, grave: false };
         }
         const parziale = cfr.uguali > 0;
@@ -4780,8 +4844,42 @@
         return { el, grave: true };
     }
 
+    // I civici di una scheda. Di un odonimo che non e' la via in lista si tengono solo quelli che
+    // stanno sulla strada in lista: gli altri sono piu' vicini a un'altra via, quindi sono suoi.
+    // Se pero' quell'odonimo e' un intero lato della strada (r.lato) ci sono tutti, anche quelli d'angolo.
+    const civiciDi = r => { const a = lastPtsByG.get(r.g) || []; return r.comeRpp && !r.lato ? a.filter(p => !p.altrove) : a; };
+
+    // I civici di un altro odonimo (suoi) occupano un lato della strada in lista? Si guarda segmento
+    // per segmento, lato per lato: un lato e' libero se la via in lista (dellaVia) non ci ha messo i
+    // suoi civici, o ne ha pochissimi rispetto a questi. Serve che almeno 3 civici, e la maggior
+    // parte, stiano su lati liberi: due numeri all'angolo sono la traversa, non un lato della via.
+    function latoLibero(suoi, dellaVia) {
+        const linee = [];
+        for (const v of captured.values()) if (v && v.coords && v.coords.length > 1) linee.push(lineaDellaVia([{ id: 0, c: v.coords }]));
+        if (!linee.length) return false;
+        const conta = (pts, soloNetti) => {
+            const n = new Map();
+            for (const p of pts) {
+                let best = null;
+                linee.forEach((L, i) => {
+                    const q = suLinea(L, p.lon * L.k, p.lat * L.h);
+                    const d = Math.hypot(q.s, q.a < 0 ? q.a : Math.max(0, q.a - L.len));
+                    if (!best || d < best.d) best = { d, s: q.s, k: i + (q.s >= 0 ? '+' : '-') };
+                });
+                // un civico della via a ridosso del segmento non dice da che lato sta
+                if (!soloNetti || Math.abs(best.s) > 2) n.set(best.k, (n.get(best.k) || 0) + 1);
+            }
+            return n;
+        };
+        const occupati = conta(dellaVia, true);
+        let liberi = 0;
+        for (const [k, n] of conta(suoi, false)) if (n > 2 * (occupati.get(k) || 0)) liberi += n;
+        return liberi >= 3 && liberi * 2 > suoi.length;
+    }
+
     function renderResults(results) {
         if (!ui.results || !results || !results.length) return;
+        ui.results.querySelectorAll('.wfit-hnrev').forEach(chiudiHnReview);
         ui.results.innerHTML = '';
         syncDotTracking();
         if (lastDupCount) {
@@ -4816,9 +4914,23 @@
         // - una scheda corrisponde ai segmenti in lista: le vie vicine si nascondono (riga "mostra");
         // - nessuna corrisponde (nome sbagliato su Waze): restano visibili, con una nota grigia
         //   invece dell'allarme rosso, cosi' il rosso resta solo sulla scheda che conta.
+        // Odonimo che su Waze NON e' la via dei segmenti in lista, mentre quello di un'altra scheda lo e'.
+        // Un civico vale per la via del suo segmento, quindi questi non si possono inserire come civici.
+        // - i suoi civici piu' vicini a un'altra strada (altrove) sono della via accanto: non contano;
+        // - se quelli che restano occupano un lato della strada in lista (vedi latoLibero) e' il lato
+        //   intestato a un'altra via: per la guida sono luoghi residenziali (RPP), con il punto di
+        //   arrivo sulla strada in lista, e la scheda resta in vista;
+        // - altrimenti e' una via accanto entrata nel raggio: la scheda si nasconde come le vie vicine.
+        const dellaVia = preparati.filter(x => x.cfr.corrisponde).flatMap(x => lastPtsByG.get(x.r.g) || []);
         for (const x of preparati) {
-            x.r.viaVicina = (nominati && !x.cfr.corrisponde) ? odonimoDiViaVicina(vicine, x.forme) : null;
-            x.r.nascosta = !!x.r.viaVicina && qualcunaCorrisponde && !mostraVieVicine;
+            const r = x.r;
+            r.viaVicina = (nominati && !x.cfr.corrisponde) ? odonimoDiViaVicina(vicine, x.forme) : null;
+            const altro = x.cfr.diversi > 0 && !x.cfr.corrisponde && qualcunaCorrisponde;
+            const suoi = (lastPtsByG.get(r.g) || []).filter(p => !p.altrove);
+            r.comeRpp = altro && !r.viaVicina && suoi.length > 0;
+            r.lato = r.comeRpp && latoLibero(suoi, dellaVia);
+            r.accanto = qualcunaCorrisponde && (!!r.viaVicina || (altro && !r.lato));
+            r.nascosta = r.accanto && !mostraVieVicine;
         }
         if (oraSuWaze.size) {
             const d = document.createElement('div');
@@ -4832,7 +4944,7 @@
             }
             ui.results.appendChild(d);
         }
-        const nascoste = qualcunaCorrisponde ? preparati.filter(x => x.r.viaVicina) : [];
+        const nascoste = preparati.filter(x => x.r.accanto);
         for (const { r, info, prefill, cfr } of preparati) {
             if (r.nascosta) continue;
             const div = document.createElement('div');
@@ -4852,7 +4964,7 @@
                     className: 'wfit-muted wfit-odo-vicina',
                     textContent: `Civici di una via vicina non in lista (su Waze \u00ab${r.viaVicina}\u00bb): non riguardano i segmenti che hai catturato.`
                 }), grave: false }
-                : avvisoOdonimo(cfr, toWazeCase(r.name), qualcunaCorrisponde, captured.size);
+                : avvisoOdonimo(cfr, toWazeCase(r.name), qualcunaCorrisponde, captured.size, r.comeRpp);
             if (allarme) {
                 div.appendChild(allarme.el);
                 if (allarme.grave) div.classList.add('wfit-res-ko');
@@ -4955,11 +5067,15 @@
                     + 'Hai controllato i cartelli (o Street View) e sei sicuro che sia la via giusta?')) return;
                 applyToSegments(v, citySel ? citySel.value : r.comune, prefill);
             });
-            const numerati = (lastPtsByG.get(r.g) || []).filter(p => p.label).length;
+            const numerati = civiciDi(r).filter(p => p.label).length;
             const bHn = document.createElement('button');
             bHn.className = 'wfit-btn';
-            bHn.textContent = `+${numerati} civici su Waze`;
-            bHn.title = 'Apre l\'elenco di controllo: scegli tu quali civici ANNCSU inserire su Waze (con lettera, es. 343/A)';
+            bHn.textContent = `+${numerati} ${r.comeRpp ? 'RPP' : 'civici'} su Waze`;
+            bHn.title = r.comeRpp
+                ? 'Apre l\'elenco di controllo: scegli tu quali civici ANNCSU creare su Waze come luoghi residenziali (RPP), con questo odonimo come indirizzo e il punto di arrivo sulla strada in lista'
+                : 'Apre l\'elenco di controllo: scegli tu quali civici ANNCSU inserire su Waze (con lettera, es. 343/A)';
+            // via e citta' come sono scritte adesso nella scheda: l'indirizzo degli RPP
+            div.wfitVia = () => ({ nome: nameIn.value.trim(), citta: citySel ? citySel.value : r.comune });
             if (!numerati) bHn.disabled = true;
             bHn.addEventListener('click', () => toggleHnReview(div, r));
             const row = document.createElement('div');
@@ -5151,8 +5267,9 @@
     }
 
     function hnCandidates(r) {
-        const all = (lastPtsByG.get(r.g) || []).filter(p => p.label);
-        const list = all.filter(p => p.d <= HN_MAX_D);
+        const all = civiciDi(r).filter(p => p.label);
+        // il limite di distanza dal segmento vale per i civici, non per i luoghi residenziali
+        const list = r.comeRpp ? all : all.filter(p => p.d <= HN_MAX_D);
         return { all, list, tooFar: all.length - list.length };
     }
 
@@ -5508,21 +5625,11 @@
             `(${captured.size} in lista)${ok ? ' \u00b7 sorgente: ' + come : ' \u00b7 LETTURA NON RIUSCITA'}`);
         // Luoghi residenziali (RPP) della stessa via: per la guida un indirizzo gia' fatto come RPP
         // non va inserito anche come civico normale
-        try {
-            for (const v of (sdk.DataModel.Venues.getAll() || [])) {
-                if (!v || !v.isResidential) continue;
-                let ad = null;
-                try { ad = sdk.DataModel.Venues.getAddress({ venueId: v.id }); } catch { continue; }
-                if (!ad || !ad.houseNumber || !ad.street) continue;
-                // stessa via = stesso nome principale, comune compatibile (non basta un alternativo)
-                const si = infoStrada(ad.street.id);
-                if (!si || !si.nome || !via.nomi.has(si.nome) || (si.citta && via.citta.size && !via.citta.has(si.citta))) continue;
-                const c = venuePoint(v);
-                if (!c) continue;
-                out.push({ num: String(ad.houseNumber), c, own: true, rpp: true });
-                lastHNScan.rpp++;
-            }
-        } catch { /* modello dei luoghi non disponibile */ }
+        // stessa via = stesso nome principale, comune compatibile (non basta un alternativo)
+        for (const h of rppCaricati(si => via.nomi.has(si.nome) && !(si.citta && via.citta.size && !via.citta.has(si.citta)))) {
+            out.push(h);
+            lastHNScan.rpp++;
+        }
         const seen = new Map();
         const uniq = [];
         for (const h of out) {
@@ -5559,6 +5666,25 @@
         let via = '';
         try { const sg = sdk.DataModel.Segments.getById({ segmentId: Number(h.sid) }); if (sg && sg.primaryStreetId != null) via = streetLabel(sg.primaryStreetId); } catch { /* sotto */ }
         return { via: via || 'segmento ' + h.sid, dett: `${via ? via + ', ' : ''}segmento ${h.sid}` };
+    }
+
+    // Luoghi residenziali (RPP) caricati nell'editor, con numero civico, il cui indirizzo sta su
+    // una via che passa il controllo stessaVia({ nome, citta }): [{ num, c, own, rpp }]
+    function rppCaricati(stessaVia) {
+        const out = [];
+        try {
+            for (const v of (sdk.DataModel.Venues.getAll() || [])) {
+                if (!v || !v.isResidential) continue;
+                let ad = null;
+                try { ad = sdk.DataModel.Venues.getAddress({ venueId: v.id }); } catch { continue; }
+                if (!ad || !ad.houseNumber || !ad.street) continue;
+                const si = infoStrada(ad.street.id);
+                if (!si || !si.nome || !stessaVia(si)) continue;
+                const c = venuePoint(v);
+                if (c) out.push({ num: String(ad.houseNumber), c, own: true, rpp: true });
+            }
+        } catch { /* modello dei luoghi non disponibile */ }
+        return out;
     }
 
     // Punto di un luogo: il punto stesso, o il centro del poligono
@@ -5864,12 +5990,12 @@
     }
 
     // Scheda vuota: intestazione, legenda, elenco e lo stato condiviso fra tutti i pezzi
-    function createHnReviewBox(shown, cand) {
+    function createHnReviewBox(shown, cand, comeRpp) {
         const box = document.createElement('div');
         box.className = 'wfit-hnrev';
         const head = document.createElement('div');
         head.className = 'wfit-muted';
-        head.innerHTML = `<b>Controlla e conferma</b> \u00b7 ${shown.length} ${pl(shown.length, 'civico pronto', 'civici pronti')}` +
+        head.innerHTML = `<b>Controlla e conferma</b> \u00b7 ${shown.length} ${comeRpp ? pl(shown.length, 'luogo residenziale (RPP) pronto', 'luoghi residenziali (RPP) pronti') : pl(shown.length, 'civico pronto', 'civici pronti')}` +
             ' \u00b7 tutti in ordine di numero' +
             (cand.tooFar ? ` \u00b7 ${cand.tooFar} oltre ${HN_MAX_D} m esclusi` : '') +
             ` \u00b7 numero modificabile \u00b7 <a href="javascript:void(0)" data-a="all">tutti</a> / <a href="javascript:void(0)" data-a="none">nessuno</a>`;
@@ -5889,11 +6015,13 @@
         box.appendChild(listDiv);
 
         const bGo = document.createElement('button');
-        const ctx = { box, head, legend, scan, listDiv, bGo, rows: [], legendBits: [], ovlWarned: new Set() };
+        const ctx = { box, head, legend, scan, listDiv, bGo, comeRpp: !!comeRpp, rows: [], legendBits: [], ovlWarned: new Set() };
+        box.wfitCtx = ctx;
         ctx.updateGo = () => {
             if (ctx.aggiornaSuspSel) ctx.aggiornaSuspSel();
+            if (ctx.sposta) ctx.sposta.applica();   // cambiate le spunte: si muovono solo i civici spuntati
             const k = ctx.rows.filter(x => x.cb.checked).length;
-            bGo.textContent = `Inserisci ${k} ${pl(k, 'civico', 'civici')}`;
+            bGo.textContent = ctx.comeRpp ? `Crea ${k} RPP` : `Inserisci ${k} ${pl(k, 'civico', 'civici')}`;
             bGo.disabled = !k;
         };
         ctx.refreshLegend = () => {
@@ -5918,7 +6046,7 @@
             : p.dup
             ? 'Questo numero compare su pi\u00f9 record ANNCSU distinti (stesso comune, stesso odonimo, stessa localit\u00e0): qui vedi un\'altra posizione dello stesso civico. Clic per centrarla e confrontarla con Street View; Waze accetta un solo punto per numero. Pochi metri di distanza = stesso accesso rilevato due volte; decine di metri = secondo accesso reale o errore d\'archivio.'
             : 'Clic sulla riga: la mappa si centra su questo civico. Il numero \u00e8 modificabile (es. 18 \u2192 18/B).';
-        return base + (p.manual ? '' : `\nCoordinate: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
+        return base + (p.manual ? '' : `\nCoordinate ANNCSU: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`);
     }
 
     // Una riga dell'elenco, come nella 0.3.5: spunta, numero modificabile, distanza, Street View
@@ -5949,7 +6077,8 @@
         });
         const note = document.createElement('span'); note.className = 'wfit-hnnote';
         const dist = document.createElement('span'); dist.className = 'wfit-muted wfit-hnd';
-        dist.textContent = isFinite(p.d) ? `~${Math.round(p.d)} m` : '';
+        const mostraDist = () => { dist.textContent = isFinite(p.d) ? `~${Math.round(p.d)} m` : ''; };
+        mostraDist();
         const sv = document.createElement('button');
         sv.type = 'button'; sv.className = 'wfit-sv'; sv.innerHTML = SV_ICON;
         sv.title = 'Apri Street View su questo civico';
@@ -5998,7 +6127,7 @@
             ctx.updateGo();
         });
         ctx.listDiv.appendChild(row);
-        ctx.rows.push({ cb, inp, p, row, setNote, setTip });
+        ctx.rows.push({ cb, inp, p, row, setNote, setTip, mostraDist });
         return row;
     }
 
@@ -6175,7 +6304,355 @@
             : `Luogo residenziale creato: ${viaTxt} ${num}${p.altro ? `, punto di ingresso su ${p.altro.nome}` : ''}. \u00c8 selezionato sulla mappa: controlla nome e punto di arrivo, poi salva.`, 12000);
     }
 
+    // Elenco di controllo di una scheda "come RPP" (vedi renderResults): ogni civico prende il
+    // segmento in lista piu' vicino (serve a metterli in fila e al punto di arrivo) e quelli che
+    // esistono gia' come luogo residenziale con lo stesso indirizzo arrivano senza spunta.
+    function annotaRpp(ctx) {
+        try {
+            ctx.segCtx = hnSegmentContext(toWazeCase(ctx.rName));
+            for (const x of ctx.rows) { const o = nearestSeg(ctx.segCtx.own, x.p.lon, x.p.lat); x.p.segId = o ? o.id : null; }
+        } catch (e) { log('segmenti per gli RPP KO', e); }
+        const nomi = new Set([toWazeCase(ctx.rName), ctx.via().nome].map(chiaveNome));
+        const gia = new Set(rppCaricati(si => nomi.has(si.nome)).map(h => hnKey(h.num, ctx.nr)));
+        let n = 0;
+        for (const x of ctx.rows) {
+            if (x.p.manual || !gia.has(hnKey(normHn(x.inp.value, x.p.nr) || x.p.label, x.p.nr))) continue;
+            x.cb.checked = false;
+            x.p.rpp = true;
+            x.row.classList.add('wfit-hnwaze');
+            x.setNote('waze', 'gi\u00e0 RPP su Waze');
+            x.setTip('Esiste gi\u00e0 un luogo residenziale (RPP) con questa via e questo numero: non va creato una seconda volta.');
+            n++;
+        }
+        if (n) ctx.addLegend('<span class="wfit-swatch wfit-sw-waze"></span> gi\u00e0 su Waze');
+        ctx.updateGo();
+    }
+
+    // Crea i luoghi residenziali di una scheda "come RPP": uno per civico spuntato, nel punto del
+    // civico (quello ANNCSU, o dove l'hai messo in fila), con l'odonimo della scheda come indirizzo
+    // e il punto di arrivo sul segmento in lista piu' vicino, col nome di quella strada. Un civico
+    // d'angolo nettamente piu' vicino a una traversa prende il punto di arrivo su quella (stessa
+    // regola dell'accesso su un'altra via). via: { nome, citta } letti dalla scheda.
+    function creaRppDellaVia(r, list, via) {
+        const blocco = editingBlock();
+        if (blocco) { toast(`Niente RPP: ${blocco}.`, 9000); return; }
+        if (busy) { toast('Attendi la fine dell\'operazione in corso.'); return; }
+        if (!via.nome) { toast('Il nome della via \u00e8 vuoto: scrivilo nella casella della scheda.'); return; }
+        const strade = hnSegmentContext(toWazeCase(r.name));
+        const own = strade.own.filter(o => o.id != null);
+        for (const p of list) {
+            const o = nearestSeg(own, p.lon, p.lat), t = nearestSeg(strade.other, p.lon, p.lat);
+            p.navSegId = t && (!o || t.d + 2 < o.d) ? t.id : (o ? o.id : null);
+        }
+        const arrivi = [...new Set(list.map(p => (p.navSegId != null ? nomeViaDelSegmento(p.navSegId) : '')).filter(Boolean))];
+        if (!confirm(`Creo ${list.length} ${pl(list.length, 'luogo residenziale', 'luoghi residenziali')} (RPP):\n\n`
+            + `\u2022 indirizzo: ${via.nome}, ${via.citta} + numero civico\n`
+            + '\u2022 punto del Place: sul civico, dove lo vedi sulla mappa\n'
+            + `\u2022 punto di arrivo: ${arrivi.length ? 'su ' + arrivi.join(' / ') + ', con il suo nome' : 'da impostare a mano (nessun segmento in lista caricato)'}\n\n`
+            + 'Poi controlla e salva tu (Ctrl+S). Procedo?')) return;
+        let streetId;
+        try {
+            const city = resolveCity(via.citta);
+            if (!city) throw new Error(`citt\u00e0 "${via.citta}" non risolvibile via SDK (impostala una volta a mano su un segmento vicino)`);
+            streetId = getOrAddStreet(via.nome, city.id).id;
+        } catch (e) { toast('Niente RPP: ' + errText(e), 10000); return; }
+        let fatti = 0;
+        const daFinire = new Set(), falliti = [];
+        for (const p of list) {
+            let passi;
+            try { passi = creaRPPCore(p.lon, p.lat, streetId, p.label, p.navSegId).passi; }
+            catch (e) { falliti.push(p.label); log('RPP', p.label, 'KO', e); continue; }
+            fatti++;
+            passi.forEach(x => daFinire.add(x));
+            logEvent('rpp', {
+                esito: 'inserito', motivo: passi.length ? 'da completare a mano: ' + passi.join(', ') : '',
+                comune: r.comune || '', localita: r.locality || '', odonimo: via.nome, civico: p.label,
+                permalink: permalink(p.lon, p.lat, p.navSegId),
+                lat: Number(p.lat.toFixed(7)), lon: Number(p.lon.toFixed(7)), dataset: r.fileDate || ''
+            });
+        }
+        if (fatti) listaDaSvuotare = true;
+        aggiornaPendingUI();
+        flushLogs();
+        toast(`${fatti} ${pl(fatti, 'luogo residenziale creato', 'luoghi residenziali creati')} per ${via.nome}`
+            + (daFinire.size ? `, ma ${[...daFinire].join(' e ')} ${pl(daFinire.size, 'va impostato', 'vanno impostati')} a mano nel pannello del Place` : '')
+            + (falliti.length ? `. Non riusciti: ${falliti.slice(0, 8).join(', ')}${falliti.length > 8 ? '\u2026' : ''}` : '')
+            + '. Controlla sulla mappa, poi salva.', falliti.length || daFinire.size ? 14000 : 9000);
+    }
+
     // Civico trovato su Street View: lo scrivi tu e nasce alla posizione attuale del centro mappa
+    /* ------------------------------------------------------------------ */
+    /* Mettere i civici in fila prima di inserirli                         */
+    /* ------------------------------------------------------------------ */
+    // I punti ANNCSU sono quasi sempre giusti, ma stanno spesso a zig-zag o troppo vicini alla
+    // strada. Nell'elenco di controllo "Metti i civici in fila" li raddrizza senza stravolgerli:
+    // ogni civico resta dal suo lato della strada e davanti al suo edificio, e cambia solo la
+    // distanza dal segmento, che diventa la stessa per tutta la fila: quella a cui sta gia' la
+    // maggior parte dei suoi civici. Lo script non li allontana di sua iniziativa: se e quanto
+    // spostarli (per portarli sopra le case) lo decide l'editor con le frecce. Le file sono due,
+    // cosi' come le da' ANNCSU (pari e dispari, oppure i due lati di una via con la numerazione
+    // in sequenza: vedi "dividi"): non si uniscono mai da sole, solo togliendo la spunta "Due file".
+    // Ogni fila ha le sue frecce:
+    // piu' lontano o piu' vicino alla strada, avanti o indietro lungo la via, piu' larga o piu'
+    // stretta. I civici senza spunta e quelli aggiunti a mano non si toccano. I pallini sulla mappa
+    // seguono subito; chiuso l'elenco tornano sul punto ANNCSU. Le regolazioni stanno in r.sposta,
+    // quindi valgono fino al confronto successivo: { due, t, a, b } con una voce { o, via, passo }
+    // per fila (t = fila unica, a e b = le due file).
+    const ROSA_VENTI = ['nord', 'nord-est', 'est', 'sud-est', 'sud', 'sud-ovest', 'ovest', 'nord-ovest'];
+    const FRECCE = ['\u2191', '\u2197', '\u2192', '\u2198', '\u2193', '\u2199', '\u2190', '\u2196'];
+    const ventoDi = (dx, dy) => Math.round((Math.atan2(dx, dy) * 180 / Math.PI + 360) / 45) % 8;
+    const FILA_MAX = HN_MAX_D - 1;   // oltre, Waze rifiuterebbe il civico
+    const mediana = v => { const s = v.slice().sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
+
+    // La via come linea in metri, percorsa sempre verso est (verso nord se e' verticale): cosi'
+    // "a sinistra" e' lo stesso lato per ogni tratto. tratti: [{ id, c }] gia' in fila e nel verso.
+    function lineaDellaVia(tratti) {
+        const k = Math.cos(tratti[0].c[0][1] * Math.PI / 180) * 111320, h = 110540;
+        const pts = [];
+        for (const t of tratti) {
+            for (const q of t.c) {
+                const x = q[0] * k, y = q[1] * h, u = pts[pts.length - 1];
+                if (!u || u[0] !== x || u[1] !== y) pts.push([x, y]);   // niente vertici doppi (giunzioni)
+            }
+        }
+        const a = pts[0], b = pts[pts.length - 1];
+        if (b[0] < a[0] || (b[0] === a[0] && b[1] < a[1])) pts.reverse();
+        const cum = [0];
+        for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+        return { k, h, pts, cum, len: cum[cum.length - 1], ids: new Set(tratti.map(t => String(t.id))) };
+    }
+    // Dove sta un punto rispetto alla linea: metri dall'inizio (a) e dalla strada (s, positivo a
+    // sinistra), il punto della strada piu' vicino (fx, fy), la direzione da li' al civico (nx, ny)
+    // e quella della strada in quel tratto (tx, ty). Oltre i due capi la linea prosegue dritta.
+    function suLinea(L, x, y) {
+        let best = null;
+        const n = L.pts.length - 1;
+        for (let i = 0; i < n; i++) {
+            const ax = L.pts[i][0], ay = L.pts[i][1], dx = L.pts[i + 1][0] - ax, dy = L.pts[i + 1][1] - ay, l = Math.hypot(dx, dy);
+            const t = Math.max(i ? 0 : -Infinity, Math.min(i < n - 1 ? 1 : Infinity, ((x - ax) * dx + (y - ay) * dy) / (l * l)));
+            const fx = ax + t * dx, fy = ay + t * dy, d = Math.hypot(x - fx, y - fy);
+            if (best && d >= best.d) continue;
+            const sx = dx * (y - ay) - dy * (x - ax) >= 0 ? 1 : -1;
+            // un civico esattamente sulla strada non ha una direzione sua: vale la perpendicolare
+            best = { d, a: L.cum[i] + t * l, s: sx * d, fx, fy, tx: dx / l, ty: dy / l, nx: d > 0.01 ? (x - fx) / d : -sx * dy / l, ny: d > 0.01 ? (y - fy) / d : sx * dx / l };
+        }
+        return best;
+    }
+    // Il punto a "a" metri dall'inizio della linea e a "s" metri dalla strada
+    function daLinea(L, a, s) {
+        let i = 0;
+        while (i < L.pts.length - 2 && L.cum[i + 1] < a) i++;
+        const ax = L.pts[i][0], ay = L.pts[i][1], dx = L.pts[i + 1][0] - ax, dy = L.pts[i + 1][1] - ay, l = L.cum[i + 1] - L.cum[i];
+        const t = (a - L.cum[i]) / l;
+        return [ax + t * dx - s * dy / l, ay + t * dy + s * dx / l];
+    }
+
+    function buildHnSposta(ctx, r) {
+        const box = document.createElement('div');
+        box.className = 'wfit-sposta';
+        box.innerHTML = '<button type="button" class="wfit-btn wfit-sp-apri" title="Raddrizza i civici spuntati senza allontanarli: ognuno resta dal suo lato della strada e davanti al suo edificio, tutti alla distanza dal segmento a cui sta gi\u00e0 la maggior parte di loro. Se e quanto spostare ogni fila lo decidi tu con le frecce: sulla mappa vedi subito il risultato.">\u2195 Metti i civici in fila</button>'
+            + '<div class="wfit-sp-corpo" style="display:none">'
+            + '<label class="wfit-sp-due" title="Con la spunta i civici restano su due file, ognuna con le sue frecce: pari e dispari, oppure i due lati della strada, cos\u00ec come li d\u00e0 ANNCSU. Senza, vanno tutti su una fila sola."><input type="checkbox"> Due file separate</label>'
+            + '<div class="wfit-sp-file"></div>'
+            + '<div class="wfit-muted wfit-sp-nota"></div>'
+            + '<button type="button" class="wfit-btn" title="Annulla tutto: i civici tornano sul punto ANNCSU.">Rimetti come in ANNCSU</button>'
+            + '</div>';
+        const corpo = box.querySelector('.wfit-sp-corpo'), nota = box.querySelector('.wfit-sp-nota'), fileDiv = box.querySelector('.wfit-sp-file');
+        const due = box.querySelector('.wfit-sp-due input'), dueRiga = box.querySelector('.wfit-sp-due');
+
+        // La linea della via sono i suoi segmenti caricati nell'editor, messi in fila: si conoscono
+        // solo dopo annotateAccessStreet, che arriva un attimo dopo l'apertura dell'elenco. Se la
+        // via intera non forma una fila unica (diramazioni, buchi) si prova con i soli segmenti che
+        // hanno civici; se nemmeno quelli, ogni segmento fa linea a se'.
+        let linee = null;
+        const file = {};   // t, a, b -> { el, nome, info, tasti }: le righe con le frecce
+        const TASTI = [
+            f => { f.o = Math.min(FILA_MAX, f.o + 1); }, f => { f.o = Math.max(-FILA_MAX, f.o - 1); },
+            f => { f.via -= 1; }, f => { f.via += 1; },
+            f => { f.passo = Math.max(20, f.passo - 10); }, f => { f.passo = Math.min(400, f.passo + 10); }
+        ];
+        const prepara = () => {
+            if (linee) return linee.length > 0;
+            if (!ctx.segCtx) return false;
+            const conCivici = [...new Set(ctx.rows.filter(x => !x.p.manual && x.p.segId != null).map(x => String(x.p.segId)))];
+            const fila = orderChain([...new Set(ctx.segCtx.own.filter(o => o.id != null).map(o => String(o.id)))]) || orderChain(conCivici);
+            const gruppi = fila ? [fila.map(e => ({ id: e.id, c: e.rev ? e.c.slice().reverse() : e.c }))]
+                : conCivici.map(id => [{ id, c: segGeometry(Number(id)) }]).filter(g => g[0].c && g[0].c.length > 1);
+            linee = gruppi.map(lineaDellaVia).filter(L => L.len > 0);
+            if (!linee.length) return false;
+            for (const k of ['t', 'a', 'b']) {
+                const el = document.createElement('div');
+                el.className = 'wfit-sp-fila';
+                el.innerHTML = '<div><b></b> <span class="wfit-muted"></span></div><div class="wfit-sp-tasti"></div>'
+                    + '<div class="wfit-sp-tasti"><span class="wfit-muted">Distanza fra i civici</span></div>';
+                const [frecce, passi] = el.querySelectorAll('.wfit-sp-tasti');
+                const tasti = TASTI.map((fn, i) => {
+                    const b = document.createElement('button');
+                    b.type = 'button'; b.className = 'wfit-btn';
+                    if (i === 2) b.classList.add('wfit-sp-stacco');
+                    if (i >= 4) {
+                        b.textContent = i === 4 ? '\u2212' : '+';
+                        b.title = i === 4 ? 'Stringe la fila: i civici si avvicinano fra loro, il centro resta fermo. Di solito non serve.' : 'Allarga la fila: i civici si allontanano fra loro, il centro resta fermo. Di solito non serve.';
+                    }
+                    // un clic = un passo; tenendo premuto continua da solo
+                    let attesa = null, giro = null;
+                    const passo = () => { const f = r.sposta && r.sposta[k]; if (f) { fn(f); applica(); } };
+                    const ferma = () => { clearTimeout(attesa); clearInterval(giro); };
+                    b.addEventListener('pointerdown', () => { ferma(); passo(); attesa = setTimeout(() => { giro = setInterval(passo, 120); }, 400); });
+                    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, ferma);
+                    b.addEventListener('click', ev => { if (ev.detail === 0) passo(); });   // dalla tastiera
+                    (i < 4 ? frecce : passi).appendChild(b);
+                    return b;
+                });
+                fileDiv.appendChild(el);
+                file[k] = { el, nome: el.querySelector('b'), info: el.querySelector('span'), tasti };
+            }
+            return true;
+        };
+
+        const rimetti = () => {
+            let n = 0;
+            for (const x of ctx.rows) if (x.p.o) { Object.assign(x.p, x.p.o); delete x.p.o; n++; }
+            return n;
+        };
+        // I civici che si possono mettere in fila, con la loro posizione ANNCSU sulla linea della via
+        const civici = () => {
+            const out = [];
+            for (const x of ctx.rows) {
+                if (!x.cb.checked || x.p.manual || x.p.segId == null) continue;
+                const L = linee.find(l => l.ids.has(String(x.p.segId)));
+                if (L) out.push(Object.assign({ x, L, num: parseInt(x.p.label, 10) }, suLinea(L, x.p.lon * L.k, x.p.lat * L.h)));
+            }
+            return out;
+        };
+        // Divide i civici nelle due file della via: [fila piu' a sinistra, altra fila] (la seconda
+        // vuota se la fila e' una sola).
+        //  - pari e dispari in due file compatte: ogni civico va con i numeri come il suo. Cosi' un
+        //    pari che sta sul segmento, magari di qualche centimetro dalla parte dei dispari, resta
+        //    con i pari. Fa eccezione chi ANNCSU mette chiaramente nell'altra fila (oltre 3 m piu'
+        //    vicino a quella): resta dov'e', lo script non lo porta dall'altra parte della strada;
+        //  - altrimenti (numeri tutti pari sui due lati, numerazione in sequenza, zig-zag ampi): le
+        //    file sono i due lati della strada, separati dal vuoto piu' largo a cavallo del segmento;
+        //  - se quel vuoto non c'e' ma pari e dispari stanno a distanze diverse, di nuovo per numero.
+        // Pari e dispari mescolati sulla stessa linea sono due file (per numero) solo a ridosso della
+        // strada, dove non si capisce da che lato stanno; piu' lontano e' una fila sola.
+        const dividi = c => {
+            const disp = c.filter(q => q.num % 2 !== 0), pari = c.filter(q => q.num % 2 === 0);
+            const cd = mediana(disp.map(q => q.s)), cp = mediana(pari.map(q => q.s));
+            // ognuno con i numeri come il suo, tranne chi sta chiaramente nell'altra fila
+            const perNumero = () => {
+                const fd = c.filter(q => { const d = q.num % 2 !== 0; return d === (Math.abs(q.s - (d ? cd : cp)) - Math.abs(q.s - (d ? cp : cd)) <= 3); });
+                const fp = c.filter(q => !fd.includes(q));
+                return cd >= cp ? [fd, fp] : [fp, fd];
+            };
+            const dueNumeri = disp.length > 0 && pari.length > 0;
+            // mescolati sulla stessa linea, lontano dalla strada: case da un lato solo, una fila
+            if (dueNumeri && Math.abs(cd - cp) < 3 && cd * cp > 0 && Math.min(Math.abs(cd), Math.abs(cp)) > 4) return [c, []];
+            if (dueNumeri && (disp.reduce((t, q) => t + Math.abs(q.s - cd), 0) + pari.reduce((t, q) => t + Math.abs(q.s - cp), 0)) / c.length <= 3) return perNumero();
+            const o = c.slice().sort((x, y) => y.s - x.s);
+            let k = 0, vuoto = 0;
+            for (let i = 1; i < o.length; i++) {
+                if (o[i - 1].s >= -2 && o[i].s <= 2 && o[i - 1].s - o[i].s > vuoto) { vuoto = o[i - 1].s - o[i].s; k = i; }
+            }
+            if (vuoto >= 4) return [o.slice(0, k), o.slice(k)];
+            return dueNumeri && Math.abs(cd - cp) >= 3 ? perNumero() : [c, []];
+        };
+        const nomeFila = g => {
+            const nn = g.map(q => q.num).filter(isFinite), pari = nn.filter(n => n % 2 === 0).length;
+            if (!nn.length) return 'Civici';
+            const lo = Math.min(...nn), hi = Math.max(...nn);
+            return (pari === nn.length ? 'Pari ' : !pari ? 'Dispari ' : 'Civici ') + (lo === hi ? lo : `${lo}\u2013${hi}`);
+        };
+
+        const applica = () => {
+            let cambiati = rimetti(), mossi = 0, fineVia = false;
+            const S = r.sposta, viste = {};
+            if (S && prepara()) {
+                const tutti = civici();
+                const [fa, fb] = dividi(tutti);
+                // due file restano due file; si uniscono solo se lo chiede l'editor
+                const dueFile = S.due !== false && fb.length > 0;
+                for (const [k, g] of dueFile ? [['a', fa], ['b', fb]] : [['t', tutti]]) {
+                    if (!g.length) continue;
+                    // Ogni fila parte dove sta gia' la maggior parte dei suoi civici: metterli in fila non
+                    // li allontana, se e quanto spostarli lo decide l'editor con le frecce
+                    if (!S[k]) { const m = mediana(g.map(q => q.s)); S[k] = { o: (m < 0 ? -1 : 1) * Math.min(FILA_MAX, Math.round(Math.abs(m))), via: 0, passo: 100 }; }
+                    const f = S[k];
+                    viste[k] = g;
+                    for (const L of linee) {
+                        const qq = g.filter(q => q.L === L);
+                        if (!qq.length) continue;
+                        // lungo la via la fila si allarga o si stringe intorno al suo centro, poi scorre;
+                        // arrivata a un capo della via si ferma tutta insieme, senza ammucchiarsi
+                        const aa = qq.map(q => q.a), lo0 = Math.min(...aa), hi0 = Math.max(...aa), c = (lo0 + hi0) / 2;
+                        const min = Math.min(0, lo0), max = Math.max(L.len, hi0);
+                        for (const q of qq) q.a2 = c + (q.a - c) * f.passo / 100 + f.via;
+                        const lo = Math.min(...qq.map(q => q.a2)), hi = Math.max(...qq.map(q => q.a2));
+                        const rientro = hi - lo > max - min ? (min + max - hi - lo) / 2 : lo < min ? min - lo : hi > max ? max - hi : 0;
+                        if (rientro) fineVia = true;
+                        for (const q of qq) {
+                            const a2 = Math.max(min, Math.min(max, q.a2 + rientro)), p = q.x.p;
+                            // Fermo lungo la via: il civico si avvicina o si allontana dalla strada lungo la
+                            // sua stessa direzione, quindi resta davanti al suo edificio (anche in curva e
+                            // sugli angoli). Se la fila scorre o cambia passo, segue la strada in parallelo.
+                            const pt = Math.abs(a2 - q.a) < 0.01 ? [q.fx + q.nx * f.o * (q.s < 0 ? -1 : 1), q.fy + q.ny * f.o * (q.s < 0 ? -1 : 1)] : daLinea(L, a2, f.o);
+                            p.o = { lon: p.lon, lat: p.lat, d: p.d, segId: p.segId };
+                            p.lon = pt[0] / L.k;
+                            p.lat = pt[1] / L.h;
+                            // nel punto nuovo il segmento della via piu' vicino puo' essere un altro
+                            const seg = nearestSeg(ctx.segCtx.own, p.lon, p.lat);
+                            if (seg) { p.segId = seg.id; p.d = seg.d; }
+                            mossi++;
+                        }
+                    }
+                }
+                cambiati += mossi;
+                due.checked = S.due !== false;
+                dueRiga.style.display = fb.length ? '' : 'none';
+            }
+            for (const [k, v] of Object.entries(file)) {
+                const g = viste[k];
+                v.el.style.display = g ? '' : 'none';
+                if (!g) continue;
+                const f = S[k];
+                // le frecce puntano dove i pallini di questa fila si muovono sulla mappa (nord in alto)
+                const tx = g.reduce((t, q) => t + q.tx, 0), ty = g.reduce((t, q) => t + q.ty, 0);
+                const versi = [ventoDi(-ty, tx), ventoDi(ty, -tx), ventoDi(-tx, -ty), ventoDi(tx, ty)];
+                versi.forEach((w, i) => {
+                    v.tasti[i].textContent = FRECCE[w];
+                    v.tasti[i].title = (i < 2 ? `Sposta la fila di 1 m verso ${ROSA_VENTI[w]}: pi\u00f9 lontano o pi\u00f9 vicino alla strada.` : `Fa scorrere la fila di 1 m lungo la via, verso ${ROSA_VENTI[w]}.`) + ' Tieni premuto per continuare.';
+                });
+                v.nome.textContent = k === 't' ? 'Tutti i civici' : nomeFila(g);
+                v.info.textContent = `\u00b7 ${g.length} ${pl(g.length, 'civico', 'civici')} \u00b7 ` + (f.o ? `${Math.abs(f.o)} m a ${ROSA_VENTI[versi[f.o > 0 ? 0 : 1]]} della strada` : 'sulla strada')
+                    + (f.via ? ` \u00b7 ${Math.abs(f.via)} m verso ${ROSA_VENTI[versi[f.via > 0 ? 3 : 2]]}` : '') + (f.passo !== 100 ? ` \u00b7 distanze al ${f.passo}%` : '');
+            }
+            if (cambiati) { for (const x of ctx.rows) x.mostraDist(); drawCivici(); }
+            nota.textContent = !S ? ''
+                : !mossi ? (linee && !linee.length ? 'Non riesco a ricostruire la linea della via: avvicinati con lo zoom e riapri l\'elenco.'
+                    : linee ? 'Nessun civico spuntato da mettere in fila.' : 'Un attimo: sto leggendo i segmenti della via\u2026')
+                : (fineVia ? 'Pi\u00f9 in l\u00e0 la via finisce: la fila si ferma l\u00ec. ' : '') + 'I civici sono in fila alla distanza che hanno in ANNCSU: per portarli sopra le case usa le frecce, che spostano la fila nella direzione che indicano. Guarda i pallini sulla mappa; si muovono solo i civici spuntati.';
+        };
+
+        box.querySelector('.wfit-sp-apri').addEventListener('click', () => {
+            if (r.sposta) { corpo.style.display = corpo.style.display === 'none' ? '' : 'none'; return; }
+            r.sposta = {};
+            corpo.style.display = '';
+            applica();
+        });
+        due.addEventListener('change', () => { r.sposta.due = due.checked; applica(); });
+        box.querySelector('.wfit-sp-corpo > button').addEventListener('click', () => { r.sposta = null; corpo.style.display = 'none'; applica(); });
+        if (r.sposta) corpo.style.display = '';   // elenco riaperto con le file di prima
+        ctx.sposta = { applica, chiudi: () => { if (rimetti()) drawCivici(); } };
+        return box;
+    }
+
+    // Chiude un elenco dei civici: i pallini spostati tornano sul punto ANNCSU
+    function chiudiHnReview(box) {
+        if (box.wfitCtx && box.wfitCtx.sposta) box.wfitCtx.sposta.chiudi();
+        box.remove();
+        syncDotTracking();
+    }
+
     function buildHnAddBox(ctx) {
         const addBox = document.createElement('div');
         addBox.className = 'wfit-hnadd';
@@ -6219,6 +6696,12 @@
         for (const x of sel) x.stack = !!(x.ovl && perGruppo[x.ovl] > 1);
         if (bad) { toast(`Controlla i numeri evidenziati in rosso: serve ${formatiHn(ctx.nr)}.`, 7000); return null; }
         if (!sel.length) return null;
+        // luoghi residenziali: i controlli sui civici del segmento non c'entrano, resta fuori solo chi esiste gia'
+        if (ctx.comeRpp) {
+            const nuovi = sel.filter(x => !x.rpp);
+            if (nuovi.length < sel.length) toast(`${sel.length - nuovi.length} ${pl(sel.length - nuovi.length, 'numero esiste gi\u00e0 come luogo residenziale e non viene ricreato', 'numeri esistono gi\u00e0 come luoghi residenziali e non vengono ricreati')}.`, 8000);
+            return nuovi.length ? nuovi : null;
+        }
         // regole della guida Numeri civici: indirizzo gia' fatto come RPP, o accesso su un'altra via
         const rpp = sel.filter(x => x.rpp);
         if (rpp.length && !confirm(
@@ -6266,13 +6749,14 @@
         const bNo = document.createElement('button');
         bNo.className = 'wfit-btn'; bNo.textContent = 'Annulla';
         foot.appendChild(ctx.bGo); foot.appendChild(bNo);
-        bNo.addEventListener('click', () => { ctx.box.remove(); syncDotTracking(); });
+        bNo.addEventListener('click', () => chiudiHnReview(ctx.box));
         ctx.bGo.addEventListener('click', () => {
             const sel = collectHnSelection(ctx);
             if (!sel) return;
-            ctx.box.remove();
-            syncDotTracking();
-            runHnInsert(r, sel);
+            // per gli RPP l'indirizzo si legge dalla scheda adesso: e' il nome che vedi nella casella
+            const via = ctx.comeRpp ? ctx.via() : null;
+            chiudiHnReview(ctx.box);
+            if (via) creaRppDellaVia(r, sel, via); else runHnInsert(r, sel);
         });
         ctx.head.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
             const v = a.dataset.a === 'all';
@@ -6367,7 +6851,7 @@
     // Annota i civici gia' presenti su Waze e toglie loro la spunta
     function annotateExistingHNs(ctx) {
         return loadExistingHNs(ctx.rName ? toWazeCase(ctx.rName) : '').then(ex => {
-            try { annotateAccessStreet(ctx, hnSegmentContext(ctx.rName ? toWazeCase(ctx.rName) : '')); } catch (e) { log('controllo accessi KO', e); }
+            try { ctx.segCtx = hnSegmentContext(ctx.rName ? toWazeCase(ctx.rName) : ''); annotateAccessStreet(ctx, ctx.segCtx); } catch (e) { log('controllo accessi KO', e); }
             const rppKeys = new Set(ex.filter(h => h.rpp).map(h => hnKey(h.num, ctx.nr)));
             // si dice sempre su cosa e' stato fatto il confronto: se la via e' lunga e ne hai
             // caricato solo un pezzo, un doppione fuori vista lo script non puo' vederlo
@@ -6461,20 +6945,24 @@
     // Passo di controllo: l'utente vede, verifica e SCEGLIE i civici prima dell'inserimento
     function toggleHnReview(card, r) {
         const oldBox = card.querySelector('.wfit-hnrev');
-        if (oldBox) { oldBox.remove(); syncDotTracking(); return; }
-        const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
-        if (!HN || typeof HN.addHouseNumber !== 'function') {
-            toast('Questa versione del WME non espone ancora addHouseNumber nell\'SDK: aggiorna l\'editor e riprova.', 8000);
-            return;
-        }
-        if (capturedHaveNamedStreet() === false) {
-            toast('Questi segmenti sono "Senza strada": i numeri civici si possono inserire SOLO su strade con il nome della via. Prima premi "Applica ai segmenti" e salva, poi riapri l\'elenco dei civici.', 11000);
-            return;
-        }
-        const ambR = viaDiLavoro(r && r.name ? toWazeCase(r.name) : '').ambigua;
-        if (ambR) {
-            toast(`In lista ci sono segmenti di pi\u00f9 vie (${ambR.join(', ')}): per i civici tieni in lista solo i segmenti della via che stai numerando.`, 11000);
-            return;
+        if (oldBox) { chiudiHnReview(oldBox); return; }
+        if (r.comeRpp) {
+            if (!rppSupportato()) { toast('Questa versione del WME non fa creare allo script i luoghi residenziali (RPP): aggiorna l\'editor e riprova.', 8000); return; }
+        } else {
+            const HN = sdk.DataModel && sdk.DataModel.HouseNumbers;
+            if (!HN || typeof HN.addHouseNumber !== 'function') {
+                toast('Questa versione del WME non espone ancora addHouseNumber nell\'SDK: aggiorna l\'editor e riprova.', 8000);
+                return;
+            }
+            if (capturedHaveNamedStreet() === false) {
+                toast('Questi segmenti sono "Senza strada": i numeri civici si possono inserire SOLO su strade con il nome della via. Prima premi "Applica ai segmenti" e salva, poi riapri l\'elenco dei civici.', 11000);
+                return;
+            }
+            const ambR = viaDiLavoro(r && r.name ? toWazeCase(r.name) : '').ambigua;
+            if (ambR) {
+                toast(`In lista ci sono segmenti di pi\u00f9 vie (${ambR.join(', ')}): per i civici tieni in lista solo i segmenti della via che stai numerando.`, 11000);
+                return;
+            }
         }
         const cand = hnCandidates(r);
         const stop = hnReviewBlocker(cand);
@@ -6494,13 +6982,16 @@
         // cosi' arrivano gia' senza spunta e con la nota che spiega il perche'
         const nOverlap = markOverlaps(shown);
 
-        const ctx = createHnReviewBox(shown, cand);
+        const ctx = createHnReviewBox(shown, cand, r.comeRpp);
         ctx.rName = r.name;
         ctx.r = r;
         ctx.nr = nrVia;
+        ctx.via = card.wfitVia;
         if (!rppSupportato()) ctx.box.classList.add('wfit-norpp');
         for (const p of shown) ctx.addRow(p);
-        ctx.box.appendChild(buildHnAddBox(ctx));
+        // in testa all'elenco, subito sotto l'intestazione: in fondo, dopo i civici, non si vedeva
+        ctx.box.insertBefore(buildHnSposta(ctx, r), ctx.listDiv);
+        if (!r.comeRpp) ctx.box.appendChild(buildHnAddBox(ctx));
         ctx.box.appendChild(buildHnFooter(ctx, r));
         ctx.updateGo();
         buildHnSuspBar(shown, ctx);
@@ -6516,7 +7007,7 @@
         if (shown.some(p => p.dup)) ctx.addLegend('<span class="wfit-swatch wfit-sw-dup"></span> stesso numero, pi\u00f9 punti');
         card.appendChild(ctx.box);
         syncDotTracking();
-        annotateExistingHNs(ctx);
+        if (r.comeRpp) annotaRpp(ctx); else annotateExistingHNs(ctx);
     }
 
     // Il WME rifiuta i civici su segmenti "proiettati", cioe' in stato transitorio
@@ -6746,6 +7237,7 @@
             }
 
             status('');
+            if (tally.ok) listaDaSvuotare = true;
             const { msg, failed } = hnInsertSummary(tally, toWazeCase(r.name));
             toast(msg, failed ? 15000 : 8000);
             aggiornaPendingUI();
